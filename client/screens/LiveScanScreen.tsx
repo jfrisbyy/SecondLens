@@ -130,6 +130,8 @@ export default function LiveScanScreen() {
     const now = Date.now();
     if (now - lastCaptureTimeRef.current < MIN_CAPTURE_GAP) return;
 
+    setStatusMessage("Analyzing document...");
+    
     if (Platform.OS !== "web") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
@@ -146,6 +148,7 @@ export default function LiveScanScreen() {
       }
     } catch (error) {
       console.error("Frame capture error:", error);
+      setStatusMessage("Error capturing. Hold steady...");
     }
   }, [isAnalyzing, analyzeFrame]);
 
@@ -191,16 +194,13 @@ export default function LiveScanScreen() {
 
           if (steadyTime >= STEADY_DURATION && !isStable) {
             setIsStable(true);
-            setStatusMessage("Analyzing document...");
             captureAndAnalyze();
           }
         } else {
           steadyStartTimeRef.current = 0;
           stabilityProgress.value = withTiming(0, { duration: 200 });
-          if (isStable) {
+          if (isStable && !isAnalyzing) {
             setIsStable(false);
-          }
-          if (!isAnalyzing) {
             setStatusMessage("Hold camera steady on document...");
           }
         }
