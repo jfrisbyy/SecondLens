@@ -34,7 +34,7 @@ import { Colors, Spacing, BorderRadius, Fonts } from "@/constants/theme";
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, "Scan">;
 
-const CAPTURE_INTERVAL = 5000;
+const CAPTURE_INTERVAL = 8000;
 
 function CodeResultCard({ item }: { item: CodeSuggestion }) {
   const { theme, isDark } = useTheme();
@@ -152,32 +152,37 @@ export default function LiveScanScreen() {
     }
   }, [isAnalyzing]);
 
+  const captureAndAnalyze = useCallback(async () => {
+    if (!cameraRef.current || isAnalyzing) return;
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.4,
+        skipProcessing: true,
+      });
+
+      if (photo?.base64) {
+        analyzeFrame(photo.base64);
+      }
+    } catch (error) {
+      console.error("Frame capture error:", error);
+    }
+  }, [isAnalyzing, analyzeFrame]);
+
   useEffect(() => {
     if (!isScanning || !isFocused) return;
 
-    const interval = setInterval(async () => {
-      if (!cameraRef.current || isAnalyzing) return;
+    captureAndAnalyze();
 
-      const timeSinceLastAnalysis = Date.now() - lastAnalysisTime;
-      if (timeSinceLastAnalysis < CAPTURE_INTERVAL) return;
-
-      try {
-        const photo = await cameraRef.current.takePictureAsync({
-          base64: true,
-          quality: 0.5,
-          skipProcessing: true,
-        });
-
-        if (photo?.base64) {
-          analyzeFrame(photo.base64);
-        }
-      } catch (error) {
-        console.error("Frame capture error:", error);
+    const interval = setInterval(() => {
+      if (!isAnalyzing) {
+        captureAndAnalyze();
       }
-    }, 1000);
+    }, CAPTURE_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [isScanning, isFocused, isAnalyzing, lastAnalysisTime, analyzeFrame]);
+  }, [isScanning, isFocused]);
 
   const toggleScanning = () => {
     if (Platform.OS !== "web") {
