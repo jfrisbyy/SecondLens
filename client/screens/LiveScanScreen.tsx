@@ -191,7 +191,7 @@ export default function LiveScanScreen() {
 
           if (steadyTime >= STEADY_DURATION && !isStable) {
             setIsStable(true);
-            setStatusMessage("Steady! Capturing...");
+            setStatusMessage("Analyzing document...");
             captureAndAnalyze();
           }
         } else {
@@ -246,6 +246,15 @@ export default function LiveScanScreen() {
     setIsScanning(true);
   };
 
+  const handleVerifyAndGetCodes = () => {
+    if (extractedData) {
+      if (Platform.OS !== "web") {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      }
+      navigation.navigate("LiveResults", { extractedData });
+    }
+  };
+
   const handleDone = () => {
     setIsScanning(false);
   };
@@ -271,15 +280,15 @@ export default function LiveScanScreen() {
       return (
         <ThemedView style={[styles.container, styles.centered]}>
           <View style={[styles.webNavBar, { paddingTop: insets.top + Spacing.md }]}>
-            <Pressable onPress={handleHistory} style={[styles.navButton, { backgroundColor: theme.card }]}>
+            <Pressable onPress={handleHistory} style={[styles.navButton, { backgroundColor: theme.backgroundSecondary }]}>
               <Feather name="clock" size={22} color={theme.text} />
             </Pressable>
             <ThemedText type="h3">MedCode AI</ThemedText>
-            <Pressable onPress={handleSettings} style={[styles.navButton, { backgroundColor: theme.card }]}>
+            <Pressable onPress={handleSettings} style={[styles.navButton, { backgroundColor: theme.backgroundSecondary }]}>
               <Feather name="settings" size={22} color={theme.text} />
             </Pressable>
           </View>
-          <View style={[styles.permissionCard, { backgroundColor: theme.card }]}>
+          <View style={[styles.permissionCard, { backgroundColor: theme.backgroundSecondary }]}>
             <Feather name="camera-off" size={48} color={theme.textSecondary} />
             <ThemedText type="h3" style={styles.permissionTitle}>
               Camera Access Required
@@ -309,15 +318,15 @@ export default function LiveScanScreen() {
     return (
       <ThemedView style={[styles.container, styles.centered]}>
         <View style={[styles.webNavBar, { paddingTop: insets.top + Spacing.md }]}>
-          <Pressable onPress={handleHistory} style={[styles.navButton, { backgroundColor: theme.card }]}>
+          <Pressable onPress={handleHistory} style={[styles.navButton, { backgroundColor: theme.backgroundSecondary }]}>
             <Feather name="clock" size={22} color={theme.text} />
           </Pressable>
           <ThemedText type="h3">MedCode AI</ThemedText>
-          <Pressable onPress={handleSettings} style={[styles.navButton, { backgroundColor: theme.card }]}>
+          <Pressable onPress={handleSettings} style={[styles.navButton, { backgroundColor: theme.backgroundSecondary }]}>
             <Feather name="settings" size={22} color={theme.text} />
           </Pressable>
         </View>
-        <View style={[styles.permissionCard, { backgroundColor: theme.card }]}>
+        <View style={[styles.permissionCard, { backgroundColor: theme.backgroundSecondary }]}>
           <Feather name="camera" size={48} color={Colors.light.primary} />
           <ThemedText type="h3" style={styles.permissionTitle}>
             Enable Camera
@@ -339,15 +348,15 @@ export default function LiveScanScreen() {
     return (
       <ThemedView style={[styles.container, styles.centered]}>
         <View style={[styles.webNavBar, { paddingTop: insets.top + Spacing.md }]}>
-          <Pressable onPress={handleHistory} style={[styles.navButton, { backgroundColor: theme.card }]}>
+          <Pressable onPress={handleHistory} style={[styles.navButton, { backgroundColor: theme.backgroundSecondary }]}>
             <Feather name="clock" size={22} color={theme.text} />
           </Pressable>
           <ThemedText type="h3">MedCode AI</ThemedText>
-          <Pressable onPress={handleSettings} style={[styles.navButton, { backgroundColor: theme.card }]}>
+          <Pressable onPress={handleSettings} style={[styles.navButton, { backgroundColor: theme.backgroundSecondary }]}>
             <Feather name="settings" size={22} color={theme.text} />
           </Pressable>
         </View>
-        <View style={[styles.permissionCard, { backgroundColor: theme.card }]}>
+        <View style={[styles.permissionCard, { backgroundColor: theme.backgroundSecondary }]}>
           <Feather name="smartphone" size={48} color={Colors.light.primary} />
           <ThemedText type="h3" style={styles.permissionTitle}>
             Use Expo Go
@@ -415,7 +424,7 @@ export default function LiveScanScreen() {
                 </ThemedText>
                 {analysisCount > 0 ? (
                   <View style={[styles.countBadge, { backgroundColor: Colors.light.primary }]}>
-                    <ThemedText type="caption" style={{ color: "#FFFFFF" }}>
+                    <ThemedText type="small" style={{ color: "#FFFFFF" }}>
                       {analysisCount}
                     </ThemedText>
                   </View>
@@ -454,7 +463,7 @@ export default function LiveScanScreen() {
                         ? Colors.light.warning 
                         : Colors.light.error 
                   }]}>
-                    <ThemedText type="caption" style={{ color: "#FFFFFF" }}>
+                    <ThemedText type="small" style={{ color: "#FFFFFF" }}>
                       {extractedData.confidence}
                     </ThemedText>
                   </View>
@@ -462,7 +471,7 @@ export default function LiveScanScreen() {
                 {extractedData.redactedFields.length > 0 ? (
                   <View style={styles.redactedInfo}>
                     <Feather name="shield" size={14} color={Colors.light.primary} />
-                    <ThemedText type="caption" style={{ color: Colors.light.primary, marginLeft: 4 }}>
+                    <ThemedText type="small" style={{ color: Colors.light.primary, marginLeft: 4 }}>
                       {extractedData.redactedFields.length} field(s) de-identified
                     </ThemedText>
                   </View>
@@ -481,7 +490,7 @@ export default function LiveScanScreen() {
                     Diagnoses
                   </ThemedText>
                   {extractedData.clinicalContent.diagnoses.map((d, i) => (
-                    <ThemedText key={i} type="caption" style={{ color: "#FFFFFF" }}>
+                    <ThemedText key={i} type="small" style={{ color: "#FFFFFF" }}>
                       - {d}
                     </ThemedText>
                   ))}
@@ -494,7 +503,7 @@ export default function LiveScanScreen() {
                     Medications
                   </ThemedText>
                   {extractedData.clinicalContent.medications.map((m, i) => (
-                    <ThemedText key={i} type="caption" style={{ color: "#FFFFFF" }}>
+                    <ThemedText key={i} type="small" style={{ color: "#FFFFFF" }}>
                       - {m}
                     </ThemedText>
                   ))}
@@ -506,39 +515,53 @@ export default function LiveScanScreen() {
 
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + Spacing.xl }]}>
           {extractedData ? (
-            <Pressable
-              onPress={handleNewScan}
-              style={[styles.doneButton, { backgroundColor: Colors.light.primary }]}
-            >
-              <Feather name="refresh-cw" size={20} color="#FFFFFF" />
-              <ThemedText type="body" style={{ color: "#FFFFFF", fontWeight: "600" }}>
-                Scan Another
-              </ThemedText>
-            </Pressable>
-          ) : null}
-
-          <Pressable onPress={toggleScanning} style={styles.scanButtonContainer}>
-            <View
-              style={[
-                styles.scanButtonOuter,
-                { borderColor: isScanning ? Colors.light.error : "#FFFFFF" },
-              ]}
-            >
-              <View
-                style={[
-                  styles.scanButtonInner,
-                  {
-                    backgroundColor: isScanning ? Colors.light.error : "#FFFFFF",
-                    borderRadius: isScanning ? 8 : 30,
-                  },
-                ]}
-              />
+            <View style={styles.resultButtonsRow}>
+              <Pressable
+                onPress={handleNewScan}
+                style={[styles.resultButton, { backgroundColor: "rgba(255,255,255,0.2)" }]}
+              >
+                <Feather name="refresh-cw" size={18} color="#FFFFFF" />
+                <ThemedText type="small" style={{ color: "#FFFFFF", fontWeight: "600" }}>
+                  Rescan
+                </ThemedText>
+              </Pressable>
+              
+              <Pressable
+                onPress={handleVerifyAndGetCodes}
+                style={[styles.resultButton, styles.primaryResultButton, { backgroundColor: Colors.light.success }]}
+              >
+                <Feather name="check-circle" size={18} color="#FFFFFF" />
+                <ThemedText type="small" style={{ color: "#FFFFFF", fontWeight: "600" }}>
+                  Verify & Get Codes
+                </ThemedText>
+              </Pressable>
             </View>
-          </Pressable>
+          ) : (
+            <>
+              <Pressable onPress={toggleScanning} style={styles.scanButtonContainer}>
+                <View
+                  style={[
+                    styles.scanButtonOuter,
+                    { borderColor: isScanning ? Colors.light.error : "#FFFFFF" },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.scanButtonInner,
+                      {
+                        backgroundColor: isScanning ? Colors.light.error : "#FFFFFF",
+                        borderRadius: isScanning ? 8 : 30,
+                      },
+                    ]}
+                  />
+                </View>
+              </Pressable>
 
-          <ThemedText type="small" style={styles.scanHint}>
-            {isScanning ? "Tap to stop scanning" : "Tap to start live scanning"}
-          </ThemedText>
+              <ThemedText type="small" style={styles.scanHint}>
+                {isScanning ? "Tap to stop scanning" : "Tap to start live scanning"}
+              </ThemedText>
+            </>
+          )}
         </View>
       </View>
     </View>
@@ -807,5 +830,22 @@ const styles = StyleSheet.create({
   clinicalSection: {
     padding: Spacing.md,
     borderRadius: BorderRadius.md,
+  },
+  resultButtonsRow: {
+    flexDirection: "row",
+    gap: Spacing.md,
+    marginBottom: Spacing.lg,
+  },
+  resultButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.full,
+    gap: Spacing.sm,
+  },
+  primaryResultButton: {
+    flex: 1,
+    justifyContent: "center",
   },
 });

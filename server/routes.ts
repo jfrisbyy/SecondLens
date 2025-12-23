@@ -253,6 +253,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/analyze-text-for-codes", async (req, res) => {
+    try {
+      const { extractedText, clinicalContent } = req.body;
+
+      if (!extractedText) {
+        return res.status(400).json({ error: "No extracted text provided" });
+      }
+
+      const clinicalContext = clinicalContent ? `
+Clinical Content Summary:
+- Diagnoses: ${clinicalContent.diagnoses?.join(", ") || "None identified"}
+- Procedures: ${clinicalContent.procedures?.join(", ") || "None identified"}
+- Medications: ${clinicalContent.medications?.join(", ") || "None identified"}
+- Lab Values: ${clinicalContent.labValues?.join(", ") || "None identified"}
+- Vital Signs: ${clinicalContent.vitalSigns?.join(", ") || "None identified"}
+- Clinical Notes: ${clinicalContent.clinicalNotes || "None"}
+` : "";
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert medical coder. Based on the de-identified medical text and clinical content provided, suggest appropriate ICD-10 and CPT codes.
+
+Analyze the clinical information and provide accurate code suggestions with confidence levels.
+
+Respond in JSON format:
+{
+  "suggestions": [
+    {
+      "code": "ICD-10 or CPT code (e.g., J18.9, 99213)",
+      "codeType": "ICD-10" or "CPT",
+      "description": "Brief description of what this code represents",
+      "confidence": "High" | "Medium" | "Low",
+      "details": "Reasoning for suggesting this code based on the clinical information"
+    }
+  ]
+}
+
+Guidelines:
+- Use official ICD-10-CM codes for diagnoses
+- Use CPT codes for procedures and services
+- Provide High confidence only when clinical information clearly supports the code
+- Include all relevant codes that can be inferred from the document
+- If information is ambiguous, use Medium or Low confidence`,
+          },
+          {
+            role: "user",
+            content: `Please analyze this de-identified medical document text and suggest appropriate medical codes:
+
+${extractedText}
+
+${clinicalContext}`,
+          },
+        ],
+        max_completion_tokens: 2048,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content || "{}";
+      let parsed: { suggestions?: CodeSuggestion[] };
+      
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        parsed = { suggestions: [] };
+      }
+
+      res.json({ suggestions: parsed.suggestions || [] });
+    } catch (error) {
+      console.error("Text to codes analysis error:", error);
+      res.status(500).json({ error: "Failed to analyze text for codes" });
+    }
+  });
+
   app.get("/api/scans", async (req, res) => {
     try {
       const scans = await db

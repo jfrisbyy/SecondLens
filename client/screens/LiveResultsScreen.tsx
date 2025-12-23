@@ -2,10 +2,11 @@ import React, { useState } from "react";
 import {
   View,
   StyleSheet,
-  FlatList,
+  ScrollView,
   Pressable,
   Share,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHeaderHeight } from "@react-navigation/elements";
@@ -19,13 +20,14 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 
-import type { RootStackParamList } from "@/navigation/RootStackNavigator";
+import type { RootStackParamList, ExtractedData } from "@/navigation/RootStackNavigator";
 import type { CodeSuggestion } from "@shared/schema";
 import { useTheme } from "@/hooks/useTheme";
 import { ThemedText } from "@/components/ThemedText";
 import { ThemedView } from "@/components/ThemedView";
 import { Card } from "@/components/Card";
 import { Spacing, BorderRadius, Colors, Fonts } from "@/constants/theme";
+import { getApiUrl } from "@/lib/query-client";
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, "LiveResults">;
 type LiveResultsRouteProp = RouteProp<RootStackParamList, "LiveResults">;
@@ -76,7 +78,7 @@ function CodeCard({ item }: { item: CodeSuggestion }) {
         <View style={styles.codeHeader}>
           <View style={styles.codeTypeContainer}>
             <View style={[styles.codeTypeBadge, { backgroundColor: Colors.light.primaryLight }]}>
-              <ThemedText type="caption" style={{ color: Colors.light.primary }}>
+              <ThemedText type="small" style={{ color: Colors.light.primary }}>
                 {item.codeType}
               </ThemedText>
             </View>
@@ -101,7 +103,7 @@ function CodeCard({ item }: { item: CodeSuggestion }) {
                 ]}
               />
               <ThemedText
-                type="caption"
+                type="small"
                 style={{ color: getConfidenceColor(item.confidence) }}
               >
                 {item.confidence}
@@ -144,17 +146,63 @@ export default function LiveResultsScreen() {
   const { theme, isDark } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<LiveResultsRouteProp>();
-  const { codes } = route.params;
+  const { extractedData } = route.params;
+
+  const [codeSuggestions, setCodeSuggestions] = useState<CodeSuggestion[]>([]);
+  const [isLoadingCodes, setIsLoadingCodes] = useState(false);
+  const [codesLoaded, setCodesLoaded] = useState(false);
+
+  const handleGetCodes = async () => {
+    if (Platform.OS !== "web") {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+    
+    setIsLoadingCodes(true);
+    
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/analyze-text-for-codes", baseUrl).toString();
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          extractedText: extractedData.extractedText,
+          clinicalContent: extractedData.clinicalContent,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.suggestions) {
+          setCodeSuggestions(data.suggestions);
+          setCodesLoaded(true);
+          if (Platform.OS !== "web") {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Code analysis error:", error);
+    } finally {
+      setIsLoadingCodes(false);
+    }
+  };
 
   const handleShare = async () => {
-    const codeText = codes
-      .map((c) => `${c.codeType}: ${c.code} - ${c.description} (${c.confidence} confidence)`)
-      .join("\n\n");
+    let shareText = `MedCode AI - Document Analysis\n\nDocument Type: ${extractedData.documentType}\n\nExtracted Text:\n${extractedData.extractedText}`;
+    
+    if (codeSuggestions.length > 0) {
+      const codeText = codeSuggestions
+        .map((c) => `${c.codeType}: ${c.code} - ${c.description} (${c.confidence} confidence)`)
+        .join("\n");
+      shareText += `\n\nSuggested Codes:\n${codeText}`;
+    }
 
     try {
       await Share.share({
-        message: `MedCode AI Live Scan Results:\n\n${codeText}`,
-        title: "Medical Code Suggestions",
+        message: shareText,
+        title: "MedCode AI Results",
       });
     } catch {}
   };
@@ -175,41 +223,156 @@ export default function LiveResultsScreen() {
         </Pressable>
       ),
     });
-  }, [navigation, theme, codes]);
+  }, [navigation, theme, extractedData, codeSuggestions]);
 
   return (
     <ThemedView style={styles.container}>
-      <FlatList
-        data={codes}
-        keyExtractor={(item, index) => `${item.code}-${index}`}
-        renderItem={({ item }) => <CodeCard item={item} />}
+      <ScrollView
         contentContainerStyle={{
           paddingTop: headerHeight + Spacing.xl,
           paddingBottom: insets.bottom + Spacing["4xl"] + 60,
           paddingHorizontal: Spacing.lg,
         }}
         scrollIndicatorInsets={{ bottom: insets.bottom }}
-        ItemSeparatorComponent={() => <View style={{ height: Spacing.md }} />}
-        ListHeaderComponent={
-          <View style={[styles.successBanner, { backgroundColor: isDark ? Colors.dark.success + "20" : Colors.light.success + "15" }]}>
-            <Feather name="zap" size={20} color={isDark ? Colors.dark.success : Colors.light.success} />
-            <ThemedText type="body" style={{ color: isDark ? Colors.dark.success : Colors.light.success }}>
-              Live scan complete - {codes.length} codes detected
+      >
+        <View style={[styles.successBanner, { backgroundColor: isDark ? Colors.dark.success + "20" : Colors.light.success + "15" }]}>
+          <Feather name="shield" size={20} color={isDark ? Colors.dark.success : Colors.light.success} />
+          <View style={{ flex: 1 }}>
+            <ThemedText type="body" style={{ color: isDark ? Colors.dark.success : Colors.light.success, fontWeight: "600" }}>
+              Document De-identified
+            </ThemedText>
+            <ThemedText type="small" style={{ color: isDark ? Colors.dark.success : Colors.light.success }}>
+              {extractedData.redactedFields.length} sensitive field(s) replaced with placeholders
             </ThemedText>
           </View>
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Feather name="file-text" size={48} color={theme.textSecondary} />
-            <ThemedText type="h3" style={{ marginTop: Spacing.lg }}>
-              No codes detected
+        </View>
+
+        <Card elevation={1} style={styles.sectionCard}>
+          <View style={styles.sectionHeader}>
+            <Feather name="file-text" size={18} color={Colors.light.primary} />
+            <ThemedText type="h4" style={{ marginLeft: Spacing.sm, flex: 1 }}>
+              {extractedData.documentType}
             </ThemedText>
-            <ThemedText type="body" style={{ color: theme.textSecondary, textAlign: "center", marginTop: Spacing.sm }}>
-              Try scanning again with the document clearly visible.
-            </ThemedText>
+            <View style={[styles.confidencePill, { 
+              backgroundColor: extractedData.confidence === "High" 
+                ? Colors.light.success + "20" 
+                : extractedData.confidence === "Medium" 
+                  ? Colors.light.warning + "20" 
+                  : Colors.light.error + "20" 
+            }]}>
+              <ThemedText type="small" style={{ 
+                color: extractedData.confidence === "High" 
+                  ? Colors.light.success 
+                  : extractedData.confidence === "Medium" 
+                    ? Colors.light.warning 
+                    : Colors.light.error 
+              }}>
+                {extractedData.confidence} Confidence
+              </ThemedText>
+            </View>
           </View>
-        }
-      />
+
+          <ThemedText type="body" style={styles.extractedText}>
+            {extractedData.extractedText}
+          </ThemedText>
+        </Card>
+
+        {extractedData.clinicalContent.diagnoses && extractedData.clinicalContent.diagnoses.length > 0 ? (
+          <Card elevation={1} style={styles.sectionCard}>
+            <View style={styles.sectionHeader}>
+              <Feather name="activity" size={18} color={Colors.light.error} />
+              <ThemedText type="h4" style={{ marginLeft: Spacing.sm }}>
+                Diagnoses
+              </ThemedText>
+            </View>
+            {extractedData.clinicalContent.diagnoses.map((d, i) => (
+              <View key={i} style={styles.listItem}>
+                <View style={[styles.listBullet, { backgroundColor: Colors.light.error }]} />
+                <ThemedText type="body" style={{ flex: 1 }}>{d}</ThemedText>
+              </View>
+            ))}
+          </Card>
+        ) : null}
+
+        {extractedData.clinicalContent.procedures && extractedData.clinicalContent.procedures.length > 0 ? (
+          <Card elevation={1} style={styles.sectionCard}>
+            <View style={styles.sectionHeader}>
+              <Feather name="scissors" size={18} color={Colors.light.primary} />
+              <ThemedText type="h4" style={{ marginLeft: Spacing.sm }}>
+                Procedures
+              </ThemedText>
+            </View>
+            {extractedData.clinicalContent.procedures.map((p, i) => (
+              <View key={i} style={styles.listItem}>
+                <View style={[styles.listBullet, { backgroundColor: Colors.light.primary }]} />
+                <ThemedText type="body" style={{ flex: 1 }}>{p}</ThemedText>
+              </View>
+            ))}
+          </Card>
+        ) : null}
+
+        {extractedData.clinicalContent.medications && extractedData.clinicalContent.medications.length > 0 ? (
+          <Card elevation={1} style={styles.sectionCard}>
+            <View style={styles.sectionHeader}>
+              <Feather name="droplet" size={18} color={Colors.light.success} />
+              <ThemedText type="h4" style={{ marginLeft: Spacing.sm }}>
+                Medications
+              </ThemedText>
+            </View>
+            {extractedData.clinicalContent.medications.map((m, i) => (
+              <View key={i} style={styles.listItem}>
+                <View style={[styles.listBullet, { backgroundColor: Colors.light.success }]} />
+                <ThemedText type="body" style={{ flex: 1 }}>{m}</ThemedText>
+              </View>
+            ))}
+          </Card>
+        ) : null}
+
+        {!codesLoaded ? (
+          <Pressable
+            onPress={handleGetCodes}
+            disabled={isLoadingCodes}
+            style={({ pressed }) => [
+              styles.getCodesButton,
+              { opacity: pressed ? 0.9 : 1, backgroundColor: Colors.light.primary },
+            ]}
+          >
+            {isLoadingCodes ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Feather name="code" size={20} color="#FFFFFF" />
+            )}
+            <ThemedText type="body" style={{ color: "#FFFFFF", fontWeight: "600", marginLeft: Spacing.sm }}>
+              {isLoadingCodes ? "Analyzing for Codes..." : "Get Medical Code Suggestions"}
+            </ThemedText>
+          </Pressable>
+        ) : null}
+
+        {codesLoaded && codeSuggestions.length > 0 ? (
+          <View style={styles.codesSection}>
+            <View style={styles.codesSectionHeader}>
+              <Feather name="tag" size={18} color={Colors.light.primary} />
+              <ThemedText type="h3" style={{ marginLeft: Spacing.sm }}>
+                Suggested Medical Codes
+              </ThemedText>
+            </View>
+            {codeSuggestions.map((item, index) => (
+              <CodeCard key={`${item.code}-${index}`} item={item} />
+            ))}
+          </View>
+        ) : null}
+
+        {codesLoaded && codeSuggestions.length === 0 ? (
+          <Card elevation={1} style={styles.sectionCard}>
+            <View style={styles.emptyCodesContainer}>
+              <Feather name="info" size={24} color={theme.textSecondary} />
+              <ThemedText type="body" style={{ color: theme.textSecondary, marginTop: Spacing.sm, textAlign: "center" }}>
+                No medical codes could be suggested from this document. Try scanning a document with more clinical details.
+              </ThemedText>
+            </View>
+          </Card>
+        ) : null}
+      </ScrollView>
 
       <Pressable
         onPress={handleNewScan}
@@ -239,8 +402,54 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
     gap: Spacing.sm,
   },
+  sectionCard: {
+    marginBottom: Spacing.md,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: Spacing.md,
+  },
+  confidencePill: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.full,
+  },
+  extractedText: {
+    lineHeight: 24,
+  },
+  listItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: Spacing.sm,
+    paddingLeft: Spacing.xs,
+  },
+  listBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginTop: 8,
+    marginRight: Spacing.sm,
+  },
+  getCodesButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    marginTop: Spacing.md,
+  },
+  codesSection: {
+    marginTop: Spacing.lg,
+  },
+  codesSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: Spacing.md,
+  },
   codeCard: {
     paddingVertical: Spacing.lg,
+    marginBottom: Spacing.md,
   },
   codeHeader: {
     flexDirection: "row",
@@ -287,10 +496,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: Spacing.sm,
   },
-  emptyContainer: {
+  emptyCodesContainer: {
     alignItems: "center",
-    paddingVertical: Spacing["3xl"],
-    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
   },
   newScanButton: {
     position: "absolute",

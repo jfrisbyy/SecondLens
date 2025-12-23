@@ -6,8 +6,6 @@ import { Feather } from "@expo/vector-icons";
 import { Pressable } from "react-native";
 import { useTheme } from "@/hooks/useTheme";
 
-import type { CodeSuggestion } from "@shared/schema";
-
 import LiveScanScreen from "@/screens/LiveScanScreen";
 import LiveResultsScreen from "@/screens/LiveResultsScreen";
 import ReviewScreen from "@/screens/ReviewScreen";
@@ -15,11 +13,27 @@ import ResultsScreen from "@/screens/ResultsScreen";
 import HistoryScreen from "@/screens/HistoryScreen";
 import SettingsScreen from "@/screens/SettingsScreen";
 
+export interface ExtractedData {
+  extractedText: string;
+  redactedFields: Array<{ fieldType: string; originalPosition: string }>;
+  clinicalContent: {
+    diagnoses?: string[];
+    procedures?: string[];
+    medications?: string[];
+    labValues?: string[];
+    vitalSigns?: string[];
+    clinicalNotes?: string;
+  };
+  documentType: string;
+  confidence: string;
+  error?: string;
+}
+
 export type RootStackParamList = {
   Scan: undefined;
   Review: { imageUri: string; imageBase64: string };
   Results: { scanId: number };
-  LiveResults: { codes: CodeSuggestion[] };
+  LiveResults: { extractedData: ExtractedData };
   History: undefined;
   Settings: undefined;
 };
