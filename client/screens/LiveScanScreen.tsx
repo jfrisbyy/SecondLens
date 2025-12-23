@@ -6,7 +6,7 @@ import {
   Platform,
   Linking,
   ActivityIndicator,
-  FlatList,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -25,8 +25,24 @@ import Animated, {
 } from "react-native-reanimated";
 
 import type { RootStackParamList } from "@/navigation/RootStackNavigator";
-import type { CodeSuggestion } from "@shared/schema";
 import { useTheme } from "@/hooks/useTheme";
+
+interface ExtractedData {
+  extractedText: string;
+  redactedFields: Array<{ fieldType: string; originalPosition: string }>;
+  clinicalContent: {
+    diagnoses?: string[];
+    procedures?: string[];
+    medications?: string[];
+    labValues?: string[];
+    vitalSigns?: string[];
+    clinicalNotes?: string;
+  };
+  documentType: string;
+  confidence: string;
+  error?: string;
+}
+
 import { ThemedText } from "@/components/ThemedText";
 import { ThemedView } from "@/components/ThemedView";
 import { Button } from "@/components/Button";
@@ -39,50 +55,6 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList, "Scan">;
 const STEADY_THRESHOLD = 0.03;
 const STEADY_DURATION = 800;
 const MIN_CAPTURE_GAP = 4000;
-
-function CodeResultCard({ item }: { item: CodeSuggestion }) {
-  const { theme, isDark } = useTheme();
-
-  const getConfidenceColor = (confidence: string) => {
-    switch (confidence) {
-      case "High":
-        return isDark ? Colors.dark.confidenceHigh : Colors.light.confidenceHigh;
-      case "Medium":
-        return isDark ? Colors.dark.confidenceMedium : Colors.light.confidenceMedium;
-      case "Low":
-        return isDark ? Colors.dark.confidenceLow : Colors.light.confidenceLow;
-      default:
-        return theme.textSecondary;
-    }
-  };
-
-  return (
-    <View style={[styles.codeCard, { backgroundColor: theme.card }]}>
-      <View style={styles.codeHeader}>
-        <View style={[styles.codeTypeBadge, { backgroundColor: Colors.light.primaryLight }]}>
-          <ThemedText type="caption" style={{ color: Colors.light.primary }}>
-            {item.codeType}
-          </ThemedText>
-        </View>
-        <ThemedText
-          type="h4"
-          style={[styles.codeNumber, { fontFamily: Fonts?.mono || "monospace" }]}
-        >
-          {item.code}
-        </ThemedText>
-      </View>
-      <ThemedText type="small" numberOfLines={2} style={{ color: theme.textSecondary }}>
-        {item.description}
-      </ThemedText>
-      <View style={[styles.confidenceBadge, { backgroundColor: getConfidenceColor(item.confidence) + "20" }]}>
-        <View style={[styles.confidenceDot, { backgroundColor: getConfidenceColor(item.confidence) }]} />
-        <ThemedText type="caption" style={{ color: getConfidenceColor(item.confidence) }}>
-          {item.confidence}
-        </ThemedText>
-      </View>
-    </View>
-  );
-}
 
 export default function LiveScanScreen() {
   const insets = useSafeAreaInsets();
@@ -97,7 +69,7 @@ export default function LiveScanScreen() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isStable, setIsStable] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Tap Start to begin scanning");
-  const [detectedCodes, setDetectedCodes] = useState<CodeSuggestion[]>([]);
+  const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
   const [analysisCount, setAnalysisCount] = useState(0);
 
   const lastCaptureTimeRef = useRef(0);
@@ -114,7 +86,7 @@ export default function LiveScanScreen() {
     if (isAnalyzing) return;
 
     setIsAnalyzing(true);
-    setStatusMessage("Analyzing document...");
+    setStatusMessage("Extracting and de-identifying text...");
     try {
       const baseUrl = getApiUrl();
       const url = new URL("/api/analyze-live", baseUrl).toString();
@@ -126,23 +98,21 @@ export default function LiveScanScreen() {
       });
 
       if (response.ok) {
-        const data = await response.json();
-        if (data.suggestions && data.suggestions.length > 0) {
+        const data: ExtractedData = await response.json();
+        
+        if (data.extractedText && !data.error) {
           if (Platform.OS !== "web") {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           }
 
-          setDetectedCodes((prev) => {
-            const existingCodes = new Set(prev.map((c) => c.code));
-            const newCodes = data.suggestions.filter(
-              (s: CodeSuggestion) => !existingCodes.has(s.code)
-            );
-            return [...prev, ...newCodes];
-          });
+          setExtractedData(data);
           setAnalysisCount((prev) => prev + 1);
-          setStatusMessage("Codes detected! Keep scanning or tap Done");
+          setIsScanning(false);
+          setStatusMessage("Text extracted successfully!");
+        } else if (data.error) {
+          setStatusMessage(data.error);
         } else {
-          setStatusMessage("No codes found. Hold steady on document...");
+          setStatusMessage("No text found. Hold steady on document...");
         }
       }
     } catch (error) {
@@ -252,7 +222,7 @@ export default function LiveScanScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
     if (!isScanning) {
-      setDetectedCodes([]);
+      setExtractedData(null);
       setAnalysisCount(0);
       setIsStable(false);
       steadyStartTimeRef.current = 0;
@@ -265,11 +235,19 @@ export default function LiveScanScreen() {
     setIsScanning(!isScanning);
   };
 
+  const handleNewScan = () => {
+    setExtractedData(null);
+    setAnalysisCount(0);
+    setIsStable(false);
+    steadyStartTimeRef.current = 0;
+    lastCaptureTimeRef.current = 0;
+    stabilityProgress.value = 0;
+    setStatusMessage("Hold camera steady on document...");
+    setIsScanning(true);
+  };
+
   const handleDone = () => {
     setIsScanning(false);
-    if (detectedCodes.length > 0) {
-      navigation.navigate("LiveResults", { codes: detectedCodes });
-    }
   };
 
   const handleHistory = () => {
@@ -456,29 +434,85 @@ export default function LiveScanScreen() {
           </View>
         ) : null}
 
-        {detectedCodes.length > 0 ? (
-          <View style={[styles.resultsPanel, { paddingBottom: insets.bottom + 100 }]}>
-            <FlatList
-              data={detectedCodes}
-              keyExtractor={(item, index) => `${item.code}-${index}`}
-              renderItem={({ item }) => <CodeResultCard item={item} />}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.resultsList}
-              ItemSeparatorComponent={() => <View style={{ width: Spacing.sm }} />}
-            />
+        {extractedData ? (
+          <View style={[styles.extractedResultsPanel, { paddingBottom: insets.bottom + 100 }]}>
+            <ScrollView 
+              style={styles.extractedScrollView}
+              contentContainerStyle={styles.extractedScrollContent}
+              showsVerticalScrollIndicator={true}
+            >
+              <View style={[styles.extractedHeader, { backgroundColor: "rgba(0,0,0,0.9)" }]}>
+                <View style={styles.extractedHeaderRow}>
+                  <Feather name="file-text" size={20} color={Colors.light.success} />
+                  <ThemedText type="body" style={{ color: "#FFFFFF", fontWeight: "600", marginLeft: Spacing.sm }}>
+                    {extractedData.documentType}
+                  </ThemedText>
+                  <View style={[styles.confidenceBadge, { 
+                    backgroundColor: extractedData.confidence === "High" 
+                      ? Colors.light.success 
+                      : extractedData.confidence === "Medium" 
+                        ? Colors.light.warning 
+                        : Colors.light.error 
+                  }]}>
+                    <ThemedText type="caption" style={{ color: "#FFFFFF" }}>
+                      {extractedData.confidence}
+                    </ThemedText>
+                  </View>
+                </View>
+                {extractedData.redactedFields.length > 0 ? (
+                  <View style={styles.redactedInfo}>
+                    <Feather name="shield" size={14} color={Colors.light.primary} />
+                    <ThemedText type="caption" style={{ color: Colors.light.primary, marginLeft: 4 }}>
+                      {extractedData.redactedFields.length} field(s) de-identified
+                    </ThemedText>
+                  </View>
+                ) : null}
+              </View>
+              
+              <View style={[styles.extractedTextBox, { backgroundColor: "rgba(0,0,0,0.85)" }]}>
+                <ThemedText type="small" style={{ color: "#FFFFFF", lineHeight: 22 }}>
+                  {extractedData.extractedText}
+                </ThemedText>
+              </View>
+
+              {extractedData.clinicalContent.diagnoses && extractedData.clinicalContent.diagnoses.length > 0 ? (
+                <View style={[styles.clinicalSection, { backgroundColor: "rgba(0,0,0,0.85)" }]}>
+                  <ThemedText type="small" style={{ color: Colors.light.primary, fontWeight: "600", marginBottom: 4 }}>
+                    Diagnoses
+                  </ThemedText>
+                  {extractedData.clinicalContent.diagnoses.map((d, i) => (
+                    <ThemedText key={i} type="caption" style={{ color: "#FFFFFF" }}>
+                      - {d}
+                    </ThemedText>
+                  ))}
+                </View>
+              ) : null}
+
+              {extractedData.clinicalContent.medications && extractedData.clinicalContent.medications.length > 0 ? (
+                <View style={[styles.clinicalSection, { backgroundColor: "rgba(0,0,0,0.85)" }]}>
+                  <ThemedText type="small" style={{ color: Colors.light.primary, fontWeight: "600", marginBottom: 4 }}>
+                    Medications
+                  </ThemedText>
+                  {extractedData.clinicalContent.medications.map((m, i) => (
+                    <ThemedText key={i} type="caption" style={{ color: "#FFFFFF" }}>
+                      - {m}
+                    </ThemedText>
+                  ))}
+                </View>
+              ) : null}
+            </ScrollView>
           </View>
         ) : null}
 
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + Spacing.xl }]}>
-          {detectedCodes.length > 0 ? (
+          {extractedData ? (
             <Pressable
-              onPress={handleDone}
-              style={[styles.doneButton, { backgroundColor: Colors.light.success }]}
+              onPress={handleNewScan}
+              style={[styles.doneButton, { backgroundColor: Colors.light.primary }]}
             >
-              <Feather name="check" size={20} color="#FFFFFF" />
+              <Feather name="refresh-cw" size={20} color="#FFFFFF" />
               <ThemedText type="body" style={{ color: "#FFFFFF", fontWeight: "600" }}>
-                Done ({detectedCodes.length} codes)
+                Scan Another
               </ThemedText>
             </Pressable>
           ) : null}
@@ -736,5 +770,42 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
+  },
+  extractedResultsPanel: {
+    position: "absolute",
+    top: "18%",
+    left: Spacing.lg,
+    right: Spacing.lg,
+    bottom: 180,
+  },
+  extractedScrollView: {
+    flex: 1,
+    borderRadius: BorderRadius.lg,
+  },
+  extractedScrollContent: {
+    gap: Spacing.sm,
+    paddingBottom: Spacing.md,
+  },
+  extractedHeader: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    gap: Spacing.xs,
+  },
+  extractedHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  redactedInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: Spacing.xs,
+  },
+  extractedTextBox: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+  },
+  clinicalSection: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
   },
 });

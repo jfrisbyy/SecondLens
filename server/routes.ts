@@ -40,29 +40,60 @@ Respond in JSON format with an array of code suggestions:
 
 If the image is unclear or doesn't contain medical information, return an empty suggestions array.`;
 
-const LIVE_SCAN_PROMPT = `You are an expert medical coder assistant performing a quick live scan of a medical document. Extract ONLY the clinical/medical coding information visible.
+const LIVE_SCAN_PROMPT = `You are a medical document text extraction and de-identification assistant. Your job is to:
 
-CRITICAL PRIVACY RULES:
-- NEVER include patient names, dates of birth, social security numbers, or any patient identifiers
-- NEVER repeat any visible patient information
-- Focus ONLY on diagnoses, procedures, and clinical findings
+1. EXTRACT all visible text from the medical document image
+2. DE-IDENTIFY the text by replacing sensitive patient information with placeholders
 
-Quickly analyze the visible medical content and return appropriate ICD-10 and CPT codes.
+DE-IDENTIFICATION RULES - Replace these with placeholders:
+- Patient names → [PATIENT_NAME]
+- Dates of birth → [DOB]
+- Social Security Numbers → [SSN]
+- Medical Record Numbers (MRN) → [MRN]
+- Phone numbers → [PHONE]
+- Addresses → [ADDRESS]
+- Email addresses → [EMAIL]
+- Insurance ID numbers → [INSURANCE_ID]
+- Account numbers → [ACCOUNT_NUMBER]
+- Any other personally identifiable information → [REDACTED]
+
+PRESERVE these clinical elements (do not redact):
+- Diagnoses and medical conditions
+- Procedure names and descriptions
+- Medications and dosages
+- Lab values and vital signs
+- Clinical notes and observations
+- Provider names (doctors, nurses) - keep as [PROVIDER_NAME]
+- Facility names - keep as [FACILITY_NAME]
+- Dates of service (just the date, not DOB) - keep as [SERVICE_DATE]
 
 Respond in JSON format:
 {
-  "suggestions": [
+  "extractedText": "The full de-identified text extracted from the document with placeholders replacing sensitive information",
+  "redactedFields": [
     {
-      "code": "ICD-10 or CPT code",
-      "codeType": "ICD-10" or "CPT",
-      "description": "Brief description",
-      "confidence": "High" | "Medium" | "Low",
-      "details": "Brief reasoning"
+      "fieldType": "Patient Name",
+      "originalPosition": "Description of where in document (e.g., 'top header')"
     }
-  ]
+  ],
+  "clinicalContent": {
+    "diagnoses": ["List of diagnoses found"],
+    "procedures": ["List of procedures found"],
+    "medications": ["List of medications found"],
+    "labValues": ["List of lab values found"],
+    "vitalSigns": ["List of vital signs found"],
+    "clinicalNotes": "Any other clinical observations"
+  },
+  "documentType": "Type of document (e.g., 'Lab Report', 'Progress Note', 'Prescription')",
+  "confidence": "High" | "Medium" | "Low"
 }
 
-If the image is blurry, unclear, or doesn't contain readable medical information, return an empty suggestions array.`;
+If the image is blurry, unclear, or doesn't contain readable text, return:
+{
+  "extractedText": "",
+  "error": "Description of issue (e.g., 'Image too blurry', 'No text visible')",
+  "confidence": "Low"
+}`;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/analyze", async (req, res) => {
@@ -171,32 +202,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 type: "image_url",
                 image_url: {
                   url: `data:image/jpeg;base64,${imageBase64}`,
-                  detail: "low",
+                  detail: "high",
                 },
               },
               {
                 type: "text",
-                text: "Quick scan - extract medical codes only.",
+                text: "Extract all text from this medical document and de-identify any patient information.",
               },
             ],
           },
         ],
-        max_completion_tokens: 1024,
+        max_completion_tokens: 4096,
         response_format: { type: "json_object" },
       });
 
       const content = response.choices[0]?.message?.content || "{}";
-      let parsed: { suggestions?: CodeSuggestion[] };
+      let parsed: {
+        extractedText?: string;
+        redactedFields?: Array<{ fieldType: string; originalPosition: string }>;
+        clinicalContent?: {
+          diagnoses?: string[];
+          procedures?: string[];
+          medications?: string[];
+          labValues?: string[];
+          vitalSigns?: string[];
+          clinicalNotes?: string;
+        };
+        documentType?: string;
+        confidence?: string;
+        error?: string;
+      };
       
       try {
         parsed = JSON.parse(content);
       } catch {
-        parsed = { suggestions: [] };
+        parsed = { extractedText: "", error: "Failed to parse response" };
       }
 
-      const suggestions = parsed.suggestions || [];
-
-      res.json({ suggestions });
+      res.json({
+        extractedText: parsed.extractedText || "",
+        redactedFields: parsed.redactedFields || [],
+        clinicalContent: parsed.clinicalContent || {},
+        documentType: parsed.documentType || "Unknown",
+        confidence: parsed.confidence || "Low",
+        error: parsed.error,
+      });
     } catch (error) {
       console.error("Live analysis error:", error);
       res.status(500).json({ error: "Failed to analyze frame" });
