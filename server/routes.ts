@@ -10,6 +10,10 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
+const liveAnalysisTracker = new Map<string, { count: number; resetTime: number }>();
+const LIVE_ANALYSIS_LIMIT = 20;
+const LIVE_ANALYSIS_WINDOW = 60000;
+
 const MEDICAL_CODING_PROMPT = `You are an expert medical coder assistant. Analyze the provided medical document image and suggest appropriate ICD-10 and CPT codes.
 
 IMPORTANT: This document may contain patient information. Focus ONLY on the clinical/medical information for coding purposes. Do not repeat any patient identifiers.
@@ -35,6 +39,30 @@ Respond in JSON format with an array of code suggestions:
 }
 
 If the image is unclear or doesn't contain medical information, return an empty suggestions array.`;
+
+const LIVE_SCAN_PROMPT = `You are an expert medical coder assistant performing a quick live scan of a medical document. Extract ONLY the clinical/medical coding information visible.
+
+CRITICAL PRIVACY RULES:
+- NEVER include patient names, dates of birth, social security numbers, or any patient identifiers
+- NEVER repeat any visible patient information
+- Focus ONLY on diagnoses, procedures, and clinical findings
+
+Quickly analyze the visible medical content and return appropriate ICD-10 and CPT codes.
+
+Respond in JSON format:
+{
+  "suggestions": [
+    {
+      "code": "ICD-10 or CPT code",
+      "codeType": "ICD-10" or "CPT",
+      "description": "Brief description",
+      "confidence": "High" | "Medium" | "Low",
+      "details": "Brief reasoning"
+    }
+  ]
+}
+
+If the image is blurry, unclear, or doesn't contain readable medical information, return an empty suggestions array.`;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/analyze", async (req, res) => {
@@ -102,6 +130,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Analysis error:", error);
       res.status(500).json({ error: "Failed to analyze document" });
+    }
+  });
+
+  app.post("/api/analyze-live", async (req, res) => {
+    try {
+      const { imageBase64 } = req.body;
+
+      if (!imageBase64) {
+        return res.status(400).json({ error: "Image data is required" });
+      }
+
+      const clientId = req.ip || "default";
+      const now = Date.now();
+      const tracker = liveAnalysisTracker.get(clientId);
+
+      if (tracker) {
+        if (now > tracker.resetTime) {
+          liveAnalysisTracker.set(clientId, { count: 1, resetTime: now + LIVE_ANALYSIS_WINDOW });
+        } else if (tracker.count >= LIVE_ANALYSIS_LIMIT) {
+          return res.status(429).json({ error: "Rate limit exceeded. Please wait before scanning again." });
+        } else {
+          tracker.count++;
+        }
+      } else {
+        liveAnalysisTracker.set(clientId, { count: 1, resetTime: now + LIVE_ANALYSIS_WINDOW });
+      }
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: LIVE_SCAN_PROMPT,
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${imageBase64}`,
+                  detail: "low",
+                },
+              },
+              {
+                type: "text",
+                text: "Quick scan - extract medical codes only.",
+              },
+            ],
+          },
+        ],
+        max_completion_tokens: 1024,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content || "{}";
+      let parsed: { suggestions?: CodeSuggestion[] };
+      
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        parsed = { suggestions: [] };
+      }
+
+      const suggestions = parsed.suggestions || [];
+
+      res.json({ suggestions });
+    } catch (error) {
+      console.error("Live analysis error:", error);
+      res.status(500).json({ error: "Failed to analyze frame" });
     }
   });
 
