@@ -34,7 +34,7 @@ import { Colors, Spacing, BorderRadius, Fonts } from "@/constants/theme";
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, "Scan">;
 
-const CAPTURE_INTERVAL = 8000;
+const CAPTURE_INTERVAL = 6000;
 
 function CodeResultCard({ item }: { item: CodeSuggestion }) {
   const { theme, isDark } = useTheme();
@@ -158,7 +158,7 @@ export default function LiveScanScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.4,
+        quality: 0.2,
         skipProcessing: true,
       });
 
