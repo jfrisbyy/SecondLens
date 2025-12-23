@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { DeviceMotion } from "expo-sensors";
 import * as Haptics from "expo-haptics";
 import { Feather } from "@expo/vector-icons";
 import { useNavigation, useIsFocused } from "@react-navigation/native";
@@ -19,6 +20,7 @@ import Animated, {
   useSharedValue,
   withRepeat,
   withTiming,
+  withSpring,
   Easing,
 } from "react-native-reanimated";
 
@@ -34,7 +36,9 @@ import { Colors, Spacing, BorderRadius, Fonts } from "@/constants/theme";
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, "Scan">;
 
-const CAPTURE_INTERVAL = 6000;
+const STEADY_THRESHOLD = 0.03;
+const STEADY_DURATION = 800;
+const MIN_CAPTURE_GAP = 4000;
 
 function CodeResultCard({ item }: { item: CodeSuggestion }) {
   const { theme, isDark } = useTheme();
@@ -91,32 +95,26 @@ export default function LiveScanScreen() {
   const [flash, setFlash] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isStable, setIsStable] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("Tap Start to begin scanning");
   const [detectedCodes, setDetectedCodes] = useState<CodeSuggestion[]>([]);
-  const [lastAnalysisTime, setLastAnalysisTime] = useState(0);
   const [analysisCount, setAnalysisCount] = useState(0);
 
-  const scanPulse = useSharedValue(1);
+  const lastCaptureTimeRef = useRef(0);
+  const steadyStartTimeRef = useRef(0);
+  const lastRotationRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
 
-  useEffect(() => {
-    if (isScanning) {
-      scanPulse.value = withRepeat(
-        withTiming(1.2, { duration: 1000, easing: Easing.inOut(Easing.ease) }),
-        -1,
-        true
-      );
-    } else {
-      scanPulse.value = 1;
-    }
-  }, [isScanning]);
+  const stabilityProgress = useSharedValue(0);
 
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scanPulse.value }],
+  const stabilityBarStyle = useAnimatedStyle(() => ({
+    width: `${stabilityProgress.value * 100}%`,
   }));
 
   const analyzeFrame = useCallback(async (base64: string) => {
     if (isAnalyzing) return;
 
     setIsAnalyzing(true);
+    setStatusMessage("Analyzing document...");
     try {
       const baseUrl = getApiUrl();
       const url = new URL("/api/analyze-live", baseUrl).toString();
@@ -142,23 +140,34 @@ export default function LiveScanScreen() {
             return [...prev, ...newCodes];
           });
           setAnalysisCount((prev) => prev + 1);
+          setStatusMessage("Codes detected! Keep scanning or tap Done");
+        } else {
+          setStatusMessage("No codes found. Hold steady on document...");
         }
       }
     } catch (error) {
       console.error("Live analysis error:", error);
+      setStatusMessage("Error analyzing. Try again...");
     } finally {
       setIsAnalyzing(false);
-      setLastAnalysisTime(Date.now());
+      lastCaptureTimeRef.current = Date.now();
     }
   }, [isAnalyzing]);
 
   const captureAndAnalyze = useCallback(async () => {
     if (!cameraRef.current || isAnalyzing) return;
 
+    const now = Date.now();
+    if (now - lastCaptureTimeRef.current < MIN_CAPTURE_GAP) return;
+
+    if (Platform.OS !== "web") {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+
     try {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.2,
+        quality: 0.3,
         skipProcessing: true,
       });
 
@@ -171,28 +180,89 @@ export default function LiveScanScreen() {
   }, [isAnalyzing, analyzeFrame]);
 
   useEffect(() => {
-    if (!isScanning || !isFocused) return;
+    if (!isScanning || !isFocused || Platform.OS === "web") return;
 
-    captureAndAnalyze();
+    let subscription: { remove: () => void } | null = null;
 
-    const interval = setInterval(() => {
-      if (!isAnalyzing) {
-        captureAndAnalyze();
+    const setupMotion = async () => {
+      await DeviceMotion.setUpdateInterval(100);
+
+      subscription = DeviceMotion.addListener((data) => {
+        if (isAnalyzing) {
+          stabilityProgress.value = withTiming(0, { duration: 200 });
+          return;
+        }
+
+        const rotation = data.rotation;
+        if (!rotation) return;
+
+        const last = lastRotationRef.current;
+        const deltaAlpha = Math.abs(rotation.alpha - last.alpha);
+        const deltaBeta = Math.abs(rotation.beta - last.beta);
+        const deltaGamma = Math.abs(rotation.gamma - last.gamma);
+        const totalMovement = deltaAlpha + deltaBeta + deltaGamma;
+
+        lastRotationRef.current = {
+          alpha: rotation.alpha,
+          beta: rotation.beta,
+          gamma: rotation.gamma,
+        };
+
+        const now = Date.now();
+
+        if (totalMovement < STEADY_THRESHOLD) {
+          if (steadyStartTimeRef.current === 0) {
+            steadyStartTimeRef.current = now;
+          }
+
+          const steadyTime = now - steadyStartTimeRef.current;
+          const progress = Math.min(steadyTime / STEADY_DURATION, 1);
+          stabilityProgress.value = withTiming(progress, { duration: 100 });
+
+          if (steadyTime >= STEADY_DURATION && !isStable) {
+            setIsStable(true);
+            setStatusMessage("Steady! Capturing...");
+            captureAndAnalyze();
+          }
+        } else {
+          steadyStartTimeRef.current = 0;
+          stabilityProgress.value = withTiming(0, { duration: 200 });
+          if (isStable) {
+            setIsStable(false);
+          }
+          if (!isAnalyzing) {
+            setStatusMessage("Hold camera steady on document...");
+          }
+        }
+      });
+    };
+
+    setupMotion();
+    setStatusMessage("Hold camera steady on document...");
+
+    return () => {
+      if (subscription) {
+        subscription.remove();
       }
-    }, CAPTURE_INTERVAL);
-
-    return () => clearInterval(interval);
-  }, [isScanning, isFocused]);
+    };
+  }, [isScanning, isFocused, isAnalyzing, isStable, captureAndAnalyze]);
 
   const toggleScanning = () => {
     if (Platform.OS !== "web") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
-    setIsScanning(!isScanning);
     if (!isScanning) {
       setDetectedCodes([]);
       setAnalysisCount(0);
+      setIsStable(false);
+      steadyStartTimeRef.current = 0;
+      lastCaptureTimeRef.current = 0;
+      stabilityProgress.value = 0;
+      setStatusMessage("Hold camera steady on document...");
+    } else {
+      setStatusMessage("Tap Start to begin scanning");
     }
+    setIsScanning(!isScanning);
   };
 
   const handleDone = () => {
@@ -351,24 +421,37 @@ export default function LiveScanScreen() {
 
         {isScanning ? (
           <View style={styles.statusBar}>
-            <View style={[styles.statusIndicator, { backgroundColor: "rgba(0,0,0,0.7)" }]}>
-              {isAnalyzing ? (
-                <ActivityIndicator size="small" color={Colors.light.primary} />
-              ) : (
-                <Animated.View style={pulseStyle}>
-                  <View style={[styles.scanDot, { backgroundColor: Colors.light.success }]} />
-                </Animated.View>
-              )}
-              <ThemedText type="small" style={{ color: "#FFFFFF" }}>
-                {isAnalyzing ? "Analyzing..." : "Scanning"}
-              </ThemedText>
-              {analysisCount > 0 ? (
-                <View style={[styles.countBadge, { backgroundColor: Colors.light.primary }]}>
-                  <ThemedText type="caption" style={{ color: "#FFFFFF" }}>
-                    {analysisCount}
-                  </ThemedText>
-                </View>
-              ) : null}
+            <View style={[styles.statusIndicator, { backgroundColor: "rgba(0,0,0,0.85)" }]}>
+              <View style={styles.statusContent}>
+                {isAnalyzing ? (
+                  <ActivityIndicator size="small" color={Colors.light.primary} />
+                ) : (
+                  <Feather 
+                    name={isStable ? "check-circle" : "target"} 
+                    size={18} 
+                    color={isStable ? Colors.light.success : "#FFFFFF"} 
+                  />
+                )}
+                <ThemedText type="small" style={{ color: "#FFFFFF", flex: 1 }}>
+                  {statusMessage}
+                </ThemedText>
+                {analysisCount > 0 ? (
+                  <View style={[styles.countBadge, { backgroundColor: Colors.light.primary }]}>
+                    <ThemedText type="caption" style={{ color: "#FFFFFF" }}>
+                      {analysisCount}
+                    </ThemedText>
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.stabilityBarContainer}>
+                <Animated.View 
+                  style={[
+                    styles.stabilityBar, 
+                    { backgroundColor: isStable ? Colors.light.success : Colors.light.primary },
+                    stabilityBarStyle
+                  ]} 
+                />
+              </View>
             </View>
           </View>
         ) : null}
@@ -507,12 +590,27 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
   statusIndicator: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    minWidth: 280,
+    overflow: "hidden",
+  },
+  statusContent: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderRadius: BorderRadius.full,
     gap: Spacing.sm,
+  },
+  stabilityBarContainer: {
+    height: 4,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 2,
+    marginTop: Spacing.sm,
+    overflow: "hidden",
+  },
+  stabilityBar: {
+    height: "100%",
+    borderRadius: 2,
   },
   scanDot: {
     width: 8,
