@@ -1,38 +1,30 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
-
-// modify the interface with any CRUD methods
-// you might need
+import { db } from "./db";
+import { scanHistory, type ScanHistory, type InsertScanHistory } from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  getScan(id: number): Promise<ScanHistory | undefined>;
+  getAllScans(): Promise<ScanHistory[]>;
+  createScan(scan: InsertScanHistory): Promise<ScanHistory>;
+  deleteScan(id: number): Promise<void>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+export const storage: IStorage = {
+  async getScan(id: number) {
+    const [scan] = await db.select().from(scanHistory).where(eq(scanHistory.id, id));
+    return scan;
+  },
 
-  constructor() {
-    this.users = new Map();
-  }
+  async getAllScans() {
+    return db.select().from(scanHistory).orderBy(desc(scanHistory.createdAt));
+  },
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
-  }
+  async createScan(scan: InsertScanHistory) {
+    const [newScan] = await db.insert(scanHistory).values(scan).returning();
+    return newScan;
+  },
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
-  }
-}
-
-export const storage = new MemStorage();
+  async deleteScan(id: number) {
+    await db.delete(scanHistory).where(eq(scanHistory.id, id));
+  },
+};
