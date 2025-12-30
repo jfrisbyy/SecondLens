@@ -291,9 +291,13 @@ async function matchCodesFromDatabase(text: string, clinicalContent?: {
   
   if (clinicalContent?.diagnoses) {
     for (const diagnosis of clinicalContent.diagnoses) {
-      const diagLower = diagnosis.toLowerCase();
+      const diagLower = diagnosis.toLowerCase().trim();
       for (const term of allTerms) {
-        if (diagLower.includes(term.term.toLowerCase()) || term.term.toLowerCase().includes(diagLower)) {
+        const termLower = term.term.toLowerCase();
+        const diagWordsMatch = diagLower.includes(termLower) && 
+          (diagLower === termLower || diagLower.length <= termLower.length + 20);
+        
+        if (diagWordsMatch) {
           if (!foundTerms.includes(term.term)) {
             foundTerms.push(term.term);
           }
