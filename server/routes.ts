@@ -10,6 +10,228 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
+const PHI_PATTERNS = {
+  ssn: /\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b/g,
+  phone: /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
+  email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+  dobLabeled: /\b(?:DOB|Date of Birth|Birth Date|Birthdate|Born|Birthday)[:\s]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\w+\s+\d{1,2},?\s+\d{4}|\d{4}[-/]\d{2}[-/]\d{2})\b/gi,
+  serviceDateLabeled: /\b(?:Service Date|Date of Service|Visit Date|Encounter Date|DOS)[:\s]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b/gi,
+  allDates: /\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])[-/](19|20)\d{2}\b/g,
+  mrn: /\b(?:MRN|Medical Record|Record #|Patient ID|Chart #)[:\s#]*[A-Z0-9]{4,15}\b/gi,
+  accountNum: /\b(?:Account|Acct|Account #|Acct #)[:\s#]*\d{5,15}\b/gi,
+  insuranceId: /\b(?:Insurance ID|Member ID|Policy|Subscriber ID|Group #)[:\s#]*[A-Z0-9]{6,20}\b/gi,
+  patientNameHeader: /\b(?:Patient|Patient Name|Name|Pt|Pt\.)[:\s]+([A-Z][a-zA-Z'-]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-zA-Z'-]+)\b/gi,
+  namePatterns: /\b([A-Z][a-zA-Z'-]{1,20}\s+(?:[A-Z]\.?\s+)?(?:Mc|Mac|O'|De|La|Van|Von)?[A-Z][a-zA-Z'-]{1,20})\b/g,
+  hyphenatedName: /\b([A-Z][a-z]+-[A-Z][a-z]+)\b/g,
+  apostropheName: /\b((?:O'|Mc|Mac)[A-Z][a-z]+)\b/g,
+  lastFirstFormat: /\b([A-Z][a-zA-Z'-]+),\s*([A-Z][a-zA-Z'-]+)(?:\s+[A-Z]\.?)?\b/g,
+  lastInitialFormat: /\b([A-Z][a-zA-Z'-]+),\s*([A-Z]\.?)\b/g,
+  initialLastFormat: /\b([A-Z]\.?\s+[A-Z][a-zA-Z'-]+)\b/g,
+  address: /\b\d{1,5}\s+(?:[A-Za-z]+\s+){1,4}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Circle|Cir|Place|Pl)\.?\s*(?:#\s*\d+|Apt\.?\s*\d+|Suite\s*\d+|Unit\s*\d+)?(?:[,\s]+[A-Za-z\s]+)?(?:,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)?/gi,
+  zipCode: /\b\d{5}(?:-\d{4})?\b/g,
+  age: /\b(?:Age|AGE)[:\s]*\d{1,3}(?:\s*(?:years?|yrs?|y\/o|yo))?\b/gi,
+};
+
+const SAFE_MEDICAL_TERMS = new Set([
+  'type', 'diabetes', 'mellitus', 'hypertension', 'pneumonia', 'chronic', 'acute',
+  'diagnosis', 'procedure', 'medication', 'treatment', 'assessment', 'blood',
+  'pressure', 'glucose', 'insulin', 'metformin', 'aspirin', 'lab', 'test',
+  'result', 'normal', 'abnormal', 'elevated', 'decreased', 'history', 'present',
+  'illness', 'review', 'systems', 'physical', 'exam', 'vital', 'signs', 'heart',
+  'lung', 'kidney', 'liver', 'cardiac', 'respiratory', 'renal', 'hepatic',
+  'gastric', 'neural', 'chronic', 'acute', 'severe', 'mild', 'moderate',
+  'bilateral', 'unilateral', 'primary', 'secondary', 'benign', 'malignant',
+  'left', 'right', 'upper', 'lower', 'anterior', 'posterior', 'lateral', 'medial',
+  'high', 'low', 'normal', 'total', 'partial', 'complete', 'stable', 'unstable',
+]);
+
+const PROTECTED_PLACEHOLDERS = ['[PATIENT_NAME]', '[DOB]', '[SSN]', '[MRN]', '[PHONE]', 
+  '[EMAIL]', '[ADDRESS]', '[INSURANCE_ID]', '[ACCOUNT_NUMBER]', '[DATE]', '[REDACTED]',
+  '[PROVIDER_NAME]', '[FACILITY_NAME]', '[SERVICE_DATE]', '[AGE]'];
+
+function enforceDeidentification(text: string): { 
+  cleanText: string; 
+  detectedPHI: string[];
+  wasModified: boolean;
+} {
+  let cleanText = text;
+  const detectedPHI: string[] = [];
+  let wasModified = false;
+
+  if (PROTECTED_PLACEHOLDERS.some(p => cleanText.includes(p))) {
+    for (const placeholder of PROTECTED_PLACEHOLDERS) {
+      cleanText = cleanText.replace(new RegExp(placeholder.replace(/[[\]]/g, '\\$&'), 'g'), placeholder);
+    }
+  }
+
+  cleanText = cleanText.replace(PHI_PATTERNS.ssn, (match) => {
+    detectedPHI.push('SSN detected');
+    wasModified = true;
+    return '[SSN]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.phone, (match) => {
+    detectedPHI.push('Phone number detected');
+    wasModified = true;
+    return '[PHONE]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.email, (match) => {
+    detectedPHI.push('Email detected');
+    wasModified = true;
+    return '[EMAIL]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.dobLabeled, (match) => {
+    detectedPHI.push('Date of Birth detected');
+    wasModified = true;
+    return '[DOB]';
+  });
+
+  const serviceDateMatches: string[] = [];
+  cleanText.replace(PHI_PATTERNS.serviceDateLabeled, (match, date) => {
+    serviceDateMatches.push(date);
+    return match;
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.serviceDateLabeled, '[SERVICE_DATE]');
+
+  cleanText = cleanText.replace(PHI_PATTERNS.allDates, (match, m, d, y) => {
+    const fullDate = match;
+    if (serviceDateMatches.includes(fullDate)) {
+      return match;
+    }
+    detectedPHI.push('Unlabeled date detected (potential DOB)');
+    wasModified = true;
+    return '[DATE]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.mrn, (match) => {
+    detectedPHI.push('MRN detected');
+    wasModified = true;
+    return '[MRN]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.accountNum, (match) => {
+    detectedPHI.push('Account number detected');
+    wasModified = true;
+    return '[ACCOUNT_NUMBER]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.insuranceId, (match) => {
+    detectedPHI.push('Insurance ID detected');
+    wasModified = true;
+    return '[INSURANCE_ID]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.age, (match) => {
+    detectedPHI.push('Age detected');
+    wasModified = true;
+    return '[AGE]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.address, (match) => {
+    detectedPHI.push('Address detected');
+    wasModified = true;
+    return '[ADDRESS]';
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.patientNameHeader, (match, name) => {
+    if (name) {
+      const words = name.toLowerCase().split(/\s+/);
+      const allSafeMedicalTerms = words.every(w => SAFE_MEDICAL_TERMS.has(w));
+      if (!allSafeMedicalTerms) {
+        detectedPHI.push('Patient name in header detected');
+        wasModified = true;
+        return match.replace(name, '[PATIENT_NAME]');
+      }
+    }
+    return match;
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.lastFirstFormat, (match, lastName, firstName) => {
+    const lastLower = lastName.toLowerCase().replace(/['-]/g, '');
+    const firstLower = firstName.toLowerCase().replace(/['-]/g, '');
+    if (!SAFE_MEDICAL_TERMS.has(lastLower) || !SAFE_MEDICAL_TERMS.has(firstLower)) {
+      detectedPHI.push('Last, First name format detected');
+      wasModified = true;
+      return '[PATIENT_NAME]';
+    }
+    return match;
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.lastInitialFormat, (match, lastName, initial) => {
+    const lastLower = lastName.toLowerCase().replace(/['-]/g, '');
+    if (!SAFE_MEDICAL_TERMS.has(lastLower)) {
+      detectedPHI.push('Last, Initial name format detected');
+      wasModified = true;
+      return '[PATIENT_NAME]';
+    }
+    return match;
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.initialLastFormat, (match) => {
+    const words = match.split(/\s+/);
+    if (words.length >= 2) {
+      const lastName = words[words.length - 1].toLowerCase().replace(/['-]/g, '');
+      if (!SAFE_MEDICAL_TERMS.has(lastName)) {
+        detectedPHI.push('Initial Last name format detected');
+        wasModified = true;
+        return '[PATIENT_NAME]';
+      }
+    }
+    return match;
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.hyphenatedName, (match) => {
+    const lowerMatch = match.toLowerCase().replace(/-/g, '');
+    if (!SAFE_MEDICAL_TERMS.has(lowerMatch)) {
+      detectedPHI.push('Hyphenated name detected');
+      wasModified = true;
+      return '[PATIENT_NAME]';
+    }
+    return match;
+  });
+
+  cleanText = cleanText.replace(PHI_PATTERNS.apostropheName, (match) => {
+    detectedPHI.push('Celtic/Irish name pattern detected');
+    wasModified = true;
+    return '[PATIENT_NAME]';
+  });
+
+  const nameMatches = cleanText.match(PHI_PATTERNS.namePatterns);
+  if (nameMatches) {
+    const processedNames = new Set<string>();
+    for (const potentialName of nameMatches) {
+      if (processedNames.has(potentialName)) continue;
+      if (potentialName.includes('[PATIENT_NAME]')) continue;
+      processedNames.add(potentialName);
+      
+      const words = potentialName.split(/\s+/).map(w => w.replace(/['-]/g, ''));
+      const wordsLower = words.map(w => w.toLowerCase());
+      
+      if (wordsLower.every(w => SAFE_MEDICAL_TERMS.has(w))) {
+        continue;
+      }
+      
+      const isLikelyName = words.length >= 2 && 
+                          words.length <= 3 &&
+                          words.every(w => /^[A-Z][a-zA-Z'-]*$/.test(w) || /^(?:Mc|Mac|O'|De|La|Van|Von)[A-Z]/.test(w)) &&
+                          words.every(w => w.length >= 2 && w.length <= 20) &&
+                          !wordsLower.some(w => ['dr', 'md', 'rn', 'np', 'pa', 'do', 'phd', 'ms', 'mr', 'mrs', 'miss'].includes(w));
+      
+      if (isLikelyName) {
+        const nameEscaped = potentialName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        cleanText = cleanText.replace(new RegExp(nameEscaped, 'g'), '[PATIENT_NAME]');
+        detectedPHI.push('Potential patient name detected');
+        wasModified = true;
+      }
+    }
+  }
+
+  return { cleanText, detectedPHI, wasModified };
+}
+
 interface RelatedCode {
   code: string;
   codeType: "ICD-10" | "CPT";
@@ -376,13 +598,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         parsed = { extractedText: "", error: "Failed to parse response" };
       }
 
+      let extractedText = parsed.extractedText || "";
+      let redactedFields = parsed.redactedFields || [];
+      
+      const { cleanText, detectedPHI, wasModified } = enforceDeidentification(extractedText);
+      extractedText = cleanText;
+      
+      if (wasModified) {
+        console.log(`[SECURITY] Server-side PHI scrubbing applied: ${detectedPHI.length} items detected`);
+        for (const detected of detectedPHI) {
+          const existingField = redactedFields.find(f => 
+            f.fieldType.toLowerCase().includes(detected.split(':')[0].toLowerCase())
+          );
+          if (!existingField) {
+            redactedFields.push({
+              fieldType: detected.split(':')[0] || 'Protected Health Information',
+              originalPosition: 'Detected by server-side verification',
+            });
+          }
+        }
+      }
+
       res.json({
-        extractedText: parsed.extractedText || "",
-        redactedFields: parsed.redactedFields || [],
+        extractedText,
+        redactedFields,
         clinicalContent: parsed.clinicalContent || {},
         documentType: parsed.documentType || "Unknown",
         confidence: parsed.confidence || "Low",
         error: parsed.error,
+        serverSideDeidentification: wasModified,
       });
     } catch (error) {
       console.error("Live analysis error:", error);
