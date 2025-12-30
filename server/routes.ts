@@ -138,8 +138,8 @@ function enforceDeidentification(text: string): {
 
   cleanText = cleanText.replace(PHI_PATTERNS.patientNameHeader, (match, name) => {
     if (name) {
-      const words = name.toLowerCase().split(/\s+/);
-      const allSafeMedicalTerms = words.every(w => SAFE_MEDICAL_TERMS.has(w));
+      const words = name.toLowerCase().split(/\s+/) as string[];
+      const allSafeMedicalTerms = words.every((w: string) => SAFE_MEDICAL_TERMS.has(w));
       if (!allSafeMedicalTerms) {
         detectedPHI.push('Patient name in header detected');
         wasModified = true;
@@ -363,6 +363,21 @@ async function matchCodesFromDatabase(text: string, clinicalContent?: {
           details: explanationMap.get(term.matchedCode) || `Matched term: "${term.term}"`,
         });
       }
+    }
+  }
+  
+  const selectedCodes = new Set(localMatches.map(m => m.code));
+  for (const exclusion of allExclusions) {
+    const code = exclusion.icdCode;
+    const explanation = exclusion.explanation;
+    if (code && explanation && !selectedCodes.has(code) && !relatedCodes.some(rc => rc.code === code)) {
+      const termEntry = allTerms.find(t => t.matchedCode === code);
+      relatedCodes.push({
+        code,
+        codeType: "ICD-10",
+        description: termEntry?.term || explanationMap.get(code) || code,
+        reason: explanation,
+      });
     }
   }
   
@@ -716,17 +731,22 @@ ${clinicalContext}${alreadyCodedInfo}`,
         });
 
         const content = response.choices[0]?.message?.content || "{}";
-        let parsed: { suggestions?: CodeSuggestion[] };
+        let parsed: { suggestions?: CodeSuggestion[]; excluded_codes?: RelatedCode[] };
         
         try {
           parsed = JSON.parse(content);
         } catch {
-          parsed = { suggestions: [] };
+          parsed = { suggestions: [], excluded_codes: [] };
         }
 
         aiSuggestions = (parsed.suggestions || []).filter(
           s => !localMatches.some(lm => lm.code === s.code)
         );
+        
+        const aiExcludedCodes = (parsed.excluded_codes || []).filter(
+          ec => !relatedCodes.some(rc => rc.code === ec.code)
+        );
+        relatedCodes.push(...aiExcludedCodes);
       }
 
       const allSuggestions = [...localMatches, ...aiSuggestions];
