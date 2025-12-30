@@ -33,16 +33,34 @@ const PHI_PATTERNS = {
 };
 
 const SAFE_MEDICAL_TERMS = new Set([
-  'type', 'diabetes', 'mellitus', 'hypertension', 'pneumonia', 'chronic', 'acute',
+  // Common medical abbreviations (CRITICAL - these were being falsely matched as names)
+  'ckd', 'chf', 'copd', 'cad', 'htn', 'dm', 'afib', 'mi', 'cvd', 'dvt', 'pe', 'uti',
+  'gerd', 'ibs', 'osa', 'bph', 'ra', 'oa', 'ms', 'als', 'pd', 'adhd', 'ocd', 'ptsd',
+  'hiv', 'aids', 'tb', 'mrsa', 'c-diff', 'aki', 'esrd', 'ards', 'sirs', 'sepsis',
+  'tia', 'cva', 'cabg', 'pci', 'stemi', 'nstemi', 'ef', 'lvef', 'bp', 'hr', 'rr',
+  'bmi', 'a1c', 'hba1c', 'egfr', 'gfr', 'bun', 'cr', 'ast', 'alt', 'ldl', 'hdl',
+  'tsh', 'psa', 'inr', 'pt', 'ptt', 'cbc', 'bmp', 'cmp', 'ua', 'ekg', 'ecg', 'mri',
+  'ct', 'xray', 'us', 'echo', 'pft', 'abg', 'vbg', 'cxr', 'kub', 'ivp',
+  // Stage/Grade modifiers (matched with abbreviations)
+  'stage', 'grade', 'class', 'level', 'phase', 'step', 'degree',
+  // Type modifiers
+  'type', 'form', 'variant', 'subtype', 'category',
+  // Common clinical terms
+  'diabetes', 'mellitus', 'hypertension', 'pneumonia', 'chronic', 'acute',
   'diagnosis', 'procedure', 'medication', 'treatment', 'assessment', 'blood',
   'pressure', 'glucose', 'insulin', 'metformin', 'aspirin', 'lab', 'test',
   'result', 'normal', 'abnormal', 'elevated', 'decreased', 'history', 'present',
   'illness', 'review', 'systems', 'physical', 'exam', 'vital', 'signs', 'heart',
   'lung', 'kidney', 'liver', 'cardiac', 'respiratory', 'renal', 'hepatic',
-  'gastric', 'neural', 'chronic', 'acute', 'severe', 'mild', 'moderate',
+  'gastric', 'neural', 'severe', 'mild', 'moderate', 'disease', 'disorder',
   'bilateral', 'unilateral', 'primary', 'secondary', 'benign', 'malignant',
   'left', 'right', 'upper', 'lower', 'anterior', 'posterior', 'lateral', 'medial',
-  'high', 'low', 'normal', 'total', 'partial', 'complete', 'stable', 'unstable',
+  'high', 'low', 'total', 'partial', 'complete', 'stable', 'unstable',
+  // Chief Complaint keywords (prevent "Chief Complaint:" header matching)
+  'chief', 'complaint', 'follow-up', 'followup', 'follow', 'up', 'routine', 'conditions',
+  // HPI keywords
+  'hpi', 'returns', 'denies', 'reports', 'symptoms', 'hypoglycemia', 'hyperglycemia',
+  'complaints', 'long-standing', 'longstanding', 'recently', 'diagnosed', 'new',
 ]);
 
 const PROTECTED_PLACEHOLDERS = ['[PATIENT_NAME]', '[DOB]', '[SSN]', '[MRN]', '[PHONE]', 
