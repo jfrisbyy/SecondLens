@@ -2,13 +2,117 @@ import type { Express } from "express";
 import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
-import { scanHistory, type CodeSuggestion } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
+import { scanHistory, icdTermMap, icdLogicRules, icdExplanations, type CodeSuggestion } from "@shared/schema";
+import { eq, desc, ilike, or, sql } from "drizzle-orm";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
+
+async function matchCodesFromDatabase(text: string, clinicalContent?: {
+  diagnoses?: string[];
+  procedures?: string[];
+  medications?: string[];
+}): Promise<{ localMatches: CodeSuggestion[]; matchedTerms: string[] }> {
+  const localMatches: CodeSuggestion[] = [];
+  const matchedTerms: string[] = [];
+  const textLower = text.toLowerCase();
+  
+  const allTerms = await db.select().from(icdTermMap);
+  const allRules = await db.select().from(icdLogicRules);
+  const allExplanations = await db.select().from(icdExplanations);
+  
+  const explanationMap = new Map(allExplanations.map(e => [e.icdCode, e.explanation]));
+  
+  const foundTerms: string[] = [];
+  const foundCodes = new Set<string>();
+  
+  for (const term of allTerms) {
+    if (textLower.includes(term.term.toLowerCase())) {
+      foundTerms.push(term.term);
+      if (term.matchedCode && !foundCodes.has(term.matchedCode)) {
+        foundCodes.add(term.matchedCode);
+        matchedTerms.push(term.term);
+      }
+    }
+  }
+  
+  if (clinicalContent?.diagnoses) {
+    for (const diagnosis of clinicalContent.diagnoses) {
+      const diagLower = diagnosis.toLowerCase();
+      for (const term of allTerms) {
+        if (diagLower.includes(term.term.toLowerCase()) || term.term.toLowerCase().includes(diagLower)) {
+          if (!foundTerms.includes(term.term)) {
+            foundTerms.push(term.term);
+          }
+          if (term.matchedCode && !foundCodes.has(term.matchedCode)) {
+            foundCodes.add(term.matchedCode);
+            matchedTerms.push(term.term);
+          }
+        }
+      }
+    }
+  }
+  
+  for (const rule of allRules) {
+    if (rule.triggerTerms) {
+      const allTriggersFound = rule.triggerTerms.every(trigger => 
+        foundTerms.some(ft => ft.toLowerCase().includes(trigger.toLowerCase()))
+      );
+      
+      if (allTriggersFound && rule.primaryCode) {
+        foundCodes.delete(allTerms.find(t => 
+          rule.triggerTerms?.some(rt => t.term.toLowerCase() === rt.toLowerCase())
+        )?.matchedCode || '');
+        
+        if (!foundCodes.has(rule.primaryCode)) {
+          foundCodes.add(rule.primaryCode);
+          
+          localMatches.push({
+            code: rule.primaryCode,
+            codeType: "ICD-10",
+            description: rule.ruleDescription || "",
+            confidence: "High",
+            details: explanationMap.get(rule.primaryCode) || `Matched from rule: ${rule.conditionCluster}`,
+          });
+          
+          if (rule.secondaryCode && !foundCodes.has(rule.secondaryCode)) {
+            foundCodes.add(rule.secondaryCode);
+            localMatches.push({
+              code: rule.secondaryCode,
+              codeType: "ICD-10",
+              description: explanationMap.get(rule.secondaryCode) || "Secondary code per coding guidelines",
+              confidence: "High",
+              details: `Required secondary code for ${rule.primaryCode}`,
+            });
+          }
+        }
+      }
+    }
+  }
+  
+  for (const term of allTerms) {
+    if (foundTerms.includes(term.term) && term.matchedCode && !localMatches.some(m => m.code === term.matchedCode)) {
+      const alreadyHandledByRule = localMatches.some(m => {
+        const rule = allRules.find(r => r.primaryCode === m.code);
+        return rule?.triggerTerms?.some(t => t.toLowerCase() === term.term.toLowerCase());
+      });
+      
+      if (!alreadyHandledByRule) {
+        localMatches.push({
+          code: term.matchedCode,
+          codeType: "ICD-10",
+          description: explanationMap.get(term.matchedCode) || term.term,
+          confidence: term.matchConfidence && term.matchConfidence >= 90 ? "High" : "Medium",
+          details: explanationMap.get(term.matchedCode) || `Matched term: "${term.term}"`,
+        });
+      }
+    }
+  }
+  
+  return { localMatches, matchedTerms };
+}
 
 const liveAnalysisTracker = new Map<string, { count: number; resetTime: number }>();
 const LIVE_ANALYSIS_LIMIT = 20;
@@ -261,7 +365,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No extracted text provided" });
       }
 
-      const clinicalContext = clinicalContent ? `
+      const { localMatches, matchedTerms } = await matchCodesFromDatabase(extractedText, clinicalContent);
+      
+      let aiSuggestions: CodeSuggestion[] = [];
+      
+      if (localMatches.length < 3 || (clinicalContent?.procedures && clinicalContent.procedures.length > 0)) {
+        const clinicalContext = clinicalContent ? `
 Clinical Content Summary:
 - Diagnoses: ${clinicalContent.diagnoses?.join(", ") || "None identified"}
 - Procedures: ${clinicalContent.procedures?.join(", ") || "None identified"}
@@ -271,12 +380,16 @@ Clinical Content Summary:
 - Clinical Notes: ${clinicalContent.clinicalNotes || "None"}
 ` : "";
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert medical coder. Based on the de-identified medical text and clinical content provided, suggest appropriate ICD-10 and CPT codes.
+        const alreadyCodedInfo = localMatches.length > 0 
+          ? `\n\nNOTE: The following codes have already been identified from our database and should NOT be duplicated: ${localMatches.map(m => m.code).join(", ")}. Focus on finding additional codes not yet identified, especially CPT procedure codes.`
+          : "";
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: `You are an expert medical coder. Based on the de-identified medical text and clinical content provided, suggest appropriate ICD-10 and CPT codes.
 
 Analyze the clinical information and provide accurate code suggestions with confidence levels.
 
@@ -299,30 +412,44 @@ Guidelines:
 - Provide High confidence only when clinical information clearly supports the code
 - Include all relevant codes that can be inferred from the document
 - If information is ambiguous, use Medium or Low confidence`,
-          },
-          {
-            role: "user",
-            content: `Please analyze this de-identified medical document text and suggest appropriate medical codes:
+            },
+            {
+              role: "user",
+              content: `Please analyze this de-identified medical document text and suggest appropriate medical codes:
 
 ${extractedText}
 
-${clinicalContext}`,
-          },
-        ],
-        max_completion_tokens: 2048,
-        response_format: { type: "json_object" },
-      });
+${clinicalContext}${alreadyCodedInfo}`,
+            },
+          ],
+          max_completion_tokens: 2048,
+          response_format: { type: "json_object" },
+        });
 
-      const content = response.choices[0]?.message?.content || "{}";
-      let parsed: { suggestions?: CodeSuggestion[] };
-      
-      try {
-        parsed = JSON.parse(content);
-      } catch {
-        parsed = { suggestions: [] };
+        const content = response.choices[0]?.message?.content || "{}";
+        let parsed: { suggestions?: CodeSuggestion[] };
+        
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          parsed = { suggestions: [] };
+        }
+
+        aiSuggestions = (parsed.suggestions || []).filter(
+          s => !localMatches.some(lm => lm.code === s.code)
+        );
       }
 
-      res.json({ suggestions: parsed.suggestions || [] });
+      const allSuggestions = [...localMatches, ...aiSuggestions];
+      
+      res.json({ 
+        suggestions: allSuggestions,
+        source: {
+          database: localMatches.length,
+          ai: aiSuggestions.length,
+          matchedTerms: matchedTerms,
+        }
+      });
     } catch (error) {
       console.error("Text to codes analysis error:", error);
       res.status(500).json({ error: "Failed to analyze text for codes" });

@@ -1,0 +1,107 @@
+-- Table 1: Clinical Term Mappings
+CREATE TABLE icd_term_map (
+    id SERIAL PRIMARY KEY,
+    term TEXT NOT NULL,
+    normalized_term TEXT,
+    matched_code VARCHAR(10),
+    match_confidence INT DEFAULT 100,
+    combo_trigger BOOLEAN DEFAULT FALSE,
+    requires_secondary_code BOOLEAN DEFAULT FALSE
+);
+
+-- Table 2: Logic Rules
+CREATE TABLE icd_logic_rules (
+    id SERIAL PRIMARY KEY,
+    condition_cluster TEXT,
+    trigger_terms TEXT[],
+    primary_code VARCHAR(10),
+    secondary_code VARCHAR(10),
+    rule_description TEXT
+);
+
+-- Table 3: Explanation Templates
+CREATE TABLE icd_explanations (
+    id SERIAL PRIMARY KEY,
+    icd_code VARCHAR(10),
+    explanation TEXT
+);
+
+-- Sample Data: Term Mappings
+INSERT INTO icd_term_map (term, normalized_term, matched_code, combo_trigger, requires_secondary_code)
+VALUES
+-- Diabetes Core Terms
+('type 2 diabetes', 'diabetes', 'E11.9', TRUE, FALSE),
+('type 2 diabetes with complications', 'diabetes', 'E11.69', TRUE, FALSE),
+('type 2 diabetes with hyperglycemia', 'diabetes', 'E11.65', TRUE, FALSE),
+('type 2 diabetes with hypoglycemia with coma', 'diabetes', 'E11.641', TRUE, FALSE),
+('type 2 diabetes with neuropathy', 'diabetes', 'E11.40', TRUE, FALSE),
+('type 2 diabetes with circulatory complications', 'diabetes', 'E11.51', TRUE, FALSE),
+-- CKD Terms
+('chronic kidney disease', 'ckd', 'N18.9', TRUE, TRUE),
+('CKD stage 1', 'ckd_stage_1', 'N18.1', FALSE, FALSE),
+('CKD stage 2', 'ckd_stage_2', 'N18.2', FALSE, FALSE),
+('CKD stage 3', 'ckd_stage_3', 'N18.3', FALSE, FALSE),
+('CKD stage 4', 'ckd_stage_4', 'N18.4', FALSE, FALSE),
+('CKD stage 5', 'ckd_stage_5', 'N18.5', FALSE, FALSE),
+('End stage renal disease', 'esrd', 'N18.6', FALSE, FALSE),
+-- Hypertension Terms
+('essential hypertension', 'htn', 'I10', FALSE, FALSE),
+('hypertensive heart and CKD stage 1-4', 'htn_ckd_early', 'I13.0', TRUE, TRUE),
+('hypertensive heart and CKD stage 5 or ESRD', 'htn_ckd_late', 'I13.10', TRUE, TRUE),
+-- History Terms
+('hx of type 2 diabetes', 'history_diabetes', 'Z86.39', FALSE, FALSE),
+('hx of ckd', 'history_ckd', 'Z87.440', FALSE, FALSE),
+-- Risk Factor Terms
+('obesity', 'obesity', 'E66.9', FALSE, FALSE),
+('hyperlipidemia', 'lipids', 'E78.5', FALSE, FALSE),
+('smoking history', 'smoking', 'Z87.891', FALSE, FALSE),
+('current smoker', 'smoking_current', 'F17.210', FALSE, FALSE);
+
+-- Sample Data: Logic Rules
+INSERT INTO icd_logic_rules (condition_cluster, trigger_terms, primary_code, secondary_code, rule_description)
+VALUES
+-- Diabetes + CKD Combo
+('diabetes_ckd', ARRAY['type 2 diabetes', 'chronic kidney disease'], 'E11.22', NULL, 'Use combo code for type 2 diabetes with CKD'),
+-- CKD Stages
+('ckd_stage', ARRAY['CKD stage 1'], 'N18.1', NULL, 'CKD stage 1 identified'),
+('ckd_stage', ARRAY['CKD stage 2'], 'N18.2', NULL, 'CKD stage 2 identified'),
+('ckd_stage', ARRAY['CKD stage 3'], 'N18.3', NULL, 'CKD stage 3 identified'),
+('ckd_stage', ARRAY['CKD stage 4'], 'N18.4', NULL, 'CKD stage 4 identified'),
+('ckd_stage', ARRAY['CKD stage 5'], 'N18.5', NULL, 'CKD stage 5 identified'),
+('esrd', ARRAY['End stage renal disease'], 'N18.6', NULL, 'ESRD identified - terminal CKD stage'),
+-- Diabetes Complications
+('diabetes_hyperglycemia', ARRAY['type 2 diabetes with hyperglycemia'], 'E11.65', NULL, 'Diabetes with high blood sugar'),
+('diabetes_hypoglycemia', ARRAY['type 2 diabetes with hypoglycemia with coma'], 'E11.641', NULL, 'Diabetes with low blood sugar and coma'),
+('diabetes_neuro', ARRAY['type 2 diabetes with neuropathy'], 'E11.40', NULL, 'Diabetes with nervous system complications'),
+('diabetes_circ', ARRAY['type 2 diabetes with circulatory complications'], 'E11.51', NULL, 'Diabetes with circulatory system complications'),
+-- Hypertensive Heart + CKD
+('htn_ckd_early', ARRAY['hypertensive heart and CKD stage 1-4'], 'I13.0', 'N18.1', 'Hypertensive heart disease with CKD stage 1-4'),
+('htn_ckd_late', ARRAY['hypertensive heart and CKD stage 5 or ESRD'], 'I13.10', 'N18.5', 'Hypertensive heart disease with CKD stage 5 or ESRD'),
+-- History Codes
+('history_diabetes', ARRAY['hx of type 2 diabetes'], 'Z86.39', NULL, 'History of resolved diabetes'),
+('history_ckd', ARRAY['hx of ckd'], 'Z87.440', NULL, 'History of resolved CKD');
+
+-- Sample Data: Explanation Templates
+INSERT INTO icd_explanations (icd_code, explanation)
+VALUES
+('E11.22', 'Type 2 diabetes with chronic kidney disease. ICD-10 guideline requires combo code (E11.22).'),
+('E11.65', 'Type 2 diabetes with hyperglycemia. Elevated glucose levels documented.'),
+('E11.641', 'Type 2 diabetes with hypoglycemia and coma. Life-threatening state.'),
+('E11.40', 'Type 2 diabetes with neuropathy. Documented nerve complications.'),
+('E11.51', 'Type 2 diabetes with circulatory complications. Use when vascular issues noted.'),
+('E11.69', 'Diabetes with unspecified complications. Use only when no specific complication is documented.'),
+('N18.1', 'CKD Stage 1. Minimal kidney damage with normal filtration.'),
+('N18.2', 'CKD Stage 2. Mild kidney function reduction.'),
+('N18.3', 'CKD Stage 3. Moderate kidney function loss.'),
+('N18.4', 'CKD Stage 4. Severe impairment of kidney function.'),
+('N18.5', 'CKD Stage 5. Near ESRD threshold.'),
+('N18.6', 'End Stage Renal Disease. Requires dialysis or transplant.'),
+('I13.0', 'Hypertensive heart disease with CKD stage 1-4. Use secondary CKD stage code.'),
+('I13.10', 'Hypertensive heart disease with CKD stage 5 or ESRD. Use secondary CKD code.'),
+('I10', 'Essential hypertension. No organ involvement documented.'),
+('Z86.39', 'History of resolved Type 2 diabetes. Not currently active.'),
+('Z87.440', 'History of CKD. Not currently active.'),
+('E66.9', 'Obesity noted. May affect risk adjustment or chronic care.'),
+('E78.5', 'Hyperlipidemia. Elevated cholesterol or lipids.'),
+('Z87.891', 'History of smoking. Former smoker.'),
+('F17.210', 'Current smoker. Tobacco use disorder present.');
