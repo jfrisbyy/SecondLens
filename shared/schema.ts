@@ -44,6 +44,8 @@ export const icdLogicRules = pgTable("icd_logic_rules", {
   primaryCode: varchar("primary_code", { length: 10 }),
   secondaryCode: varchar("secondary_code", { length: 10 }),
   ruleDescription: text("rule_description"),
+  suppressionKeywords: text("suppression_keywords").array(),
+  reasonNotSelected: text("reason_not_selected"),
 });
 
 export const icdExplanations = pgTable("icd_explanations", {
@@ -52,8 +54,15 @@ export const icdExplanations = pgTable("icd_explanations", {
   explanation: text("explanation"),
 });
 
+export const icdRelatedExclusions = pgTable("icd_related_exclusions", {
+  id: serial("id").primaryKey(),
+  icdCode: varchar("icd_code", { length: 10 }),
+  explanation: text("explanation"),
+});
+
 export type IcdTermMap = typeof icdTermMap.$inferSelect;
 export type IcdLogicRule = typeof icdLogicRules.$inferSelect;
 export type IcdExplanation = typeof icdExplanations.$inferSelect;
+export type IcdRelatedExclusion = typeof icdRelatedExclusions.$inferSelect;
 
 export * from "./models/chat";

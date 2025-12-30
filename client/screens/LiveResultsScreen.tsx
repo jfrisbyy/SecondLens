@@ -23,6 +23,13 @@ import Animated, {
 import type { RootStackParamList, ExtractedData } from "@/navigation/RootStackNavigator";
 import type { CodeSuggestion } from "@shared/schema";
 import { useTheme } from "@/hooks/useTheme";
+
+interface RelatedCode {
+  code: string;
+  codeType: "ICD-10" | "CPT";
+  description: string;
+  reason: string;
+}
 import { ThemedText } from "@/components/ThemedText";
 import { ThemedView } from "@/components/ThemedView";
 import { Card } from "@/components/Card";
@@ -149,6 +156,7 @@ export default function LiveResultsScreen() {
   const { extractedData } = route.params;
 
   const [codeSuggestions, setCodeSuggestions] = useState<CodeSuggestion[]>([]);
+  const [relatedCodes, setRelatedCodes] = useState<RelatedCode[]>([]);
   const [isLoadingCodes, setIsLoadingCodes] = useState(false);
   const [codesLoaded, setCodesLoaded] = useState(false);
 
@@ -174,12 +182,15 @@ export default function LiveResultsScreen() {
 
       if (response.ok) {
         const data = await response.json();
-        if (data.suggestions) {
-          setCodeSuggestions(data.suggestions);
+        if (data.suggested_codes) {
+          setCodeSuggestions(data.suggested_codes);
           setCodesLoaded(true);
           if (Platform.OS !== "web") {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           }
+        }
+        if (data.related_codes) {
+          setRelatedCodes(data.related_codes);
         }
       }
     } catch (error) {
@@ -372,6 +383,46 @@ export default function LiveResultsScreen() {
             </View>
           </Card>
         ) : null}
+
+        {codesLoaded && relatedCodes.length > 0 ? (
+          <View style={styles.relatedSection}>
+            <View style={styles.relatedSectionHeader}>
+              <Feather name="x-circle" size={18} color={theme.textSecondary} />
+              <ThemedText type="h4" style={{ marginLeft: Spacing.sm, color: theme.textSecondary }}>
+                Codes Considered But Not Selected
+              </ThemedText>
+            </View>
+            <ThemedText type="small" style={{ color: theme.textSecondary, marginBottom: Spacing.md }}>
+              These codes were evaluated but excluded based on chart documentation:
+            </ThemedText>
+            {relatedCodes.map((item, index) => (
+              <Card key={`related-${item.code}-${index}`} elevation={0} style={styles.relatedCodeCard}>
+                <View style={styles.relatedCodeHeader}>
+                  <View style={[styles.codeTypeBadge, { backgroundColor: theme.border }]}>
+                    <ThemedText type="small" style={{ color: theme.textSecondary }}>
+                      {item.codeType}
+                    </ThemedText>
+                  </View>
+                  <ThemedText
+                    type="body"
+                    style={[styles.relatedCodeNumber, { color: theme.textSecondary, fontFamily: Fonts?.mono || "monospace" }]}
+                  >
+                    {item.code}
+                  </ThemedText>
+                </View>
+                <ThemedText type="small" style={{ color: theme.textSecondary, marginTop: Spacing.xs }}>
+                  {item.description}
+                </ThemedText>
+                <View style={[styles.exclusionReason, { backgroundColor: isDark ? Colors.dark.warning + "10" : Colors.light.warning + "10" }]}>
+                  <Feather name="alert-circle" size={14} color={isDark ? Colors.dark.warning : Colors.light.warning} />
+                  <ThemedText type="small" style={{ color: isDark ? Colors.dark.warning : Colors.light.warning, flex: 1 }}>
+                    {item.reason}
+                  </ThemedText>
+                </View>
+              </Card>
+            ))}
+          </View>
+        ) : null}
       </ScrollView>
 
       <Pressable
@@ -519,5 +570,38 @@ const styles = StyleSheet.create({
   newScanText: {
     color: "#FFFFFF",
     fontWeight: "600",
+  },
+  relatedSection: {
+    marginTop: Spacing.xl,
+    paddingTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
+  relatedSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: Spacing.xs,
+  },
+  relatedCodeCard: {
+    marginBottom: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderStyle: "dashed",
+  },
+  relatedCodeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  relatedCodeNumber: {
+    letterSpacing: 0.5,
+  },
+  exclusionReason: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    padding: Spacing.sm,
+    borderRadius: BorderRadius.xs,
   },
 });

@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "node:http";
 import OpenAI from "openai";
 import { db } from "./db";
-import { scanHistory, icdTermMap, icdLogicRules, icdExplanations, type CodeSuggestion } from "@shared/schema";
+import { scanHistory, icdTermMap, icdLogicRules, icdExplanations, icdRelatedExclusions, type CodeSuggestion } from "@shared/schema";
 import { eq, desc, ilike, or, sql } from "drizzle-orm";
 
 const openai = new OpenAI({
@@ -10,23 +10,34 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
+interface RelatedCode {
+  code: string;
+  codeType: "ICD-10" | "CPT";
+  description: string;
+  reason: string;
+}
+
 async function matchCodesFromDatabase(text: string, clinicalContent?: {
   diagnoses?: string[];
   procedures?: string[];
   medications?: string[];
-}): Promise<{ localMatches: CodeSuggestion[]; matchedTerms: string[] }> {
+}): Promise<{ localMatches: CodeSuggestion[]; relatedCodes: RelatedCode[]; matchedTerms: string[] }> {
   const localMatches: CodeSuggestion[] = [];
+  const relatedCodes: RelatedCode[] = [];
   const matchedTerms: string[] = [];
   const textLower = text.toLowerCase();
   
   const allTerms = await db.select().from(icdTermMap);
   const allRules = await db.select().from(icdLogicRules);
   const allExplanations = await db.select().from(icdExplanations);
+  const allExclusions = await db.select().from(icdRelatedExclusions);
   
   const explanationMap = new Map(allExplanations.map(e => [e.icdCode, e.explanation]));
+  const exclusionMap = new Map(allExclusions.map(e => [e.icdCode, e.explanation]));
   
   const foundTerms: string[] = [];
   const foundCodes = new Set<string>();
+  const suppressedCodes = new Set<string>();
   
   for (const term of allTerms) {
     if (textLower.includes(term.term.toLowerCase())) {
@@ -62,6 +73,24 @@ async function matchCodesFromDatabase(text: string, clinicalContent?: {
       );
       
       if (allTriggersFound && rule.primaryCode) {
+        const isSuppressed = rule.suppressionKeywords?.some(keyword => 
+          textLower.includes(keyword.toLowerCase())
+        );
+        
+        if (isSuppressed) {
+          suppressedCodes.add(rule.primaryCode);
+          const exclusionExplanation = exclusionMap.get(rule.primaryCode) || rule.reasonNotSelected;
+          if (exclusionExplanation) {
+            relatedCodes.push({
+              code: rule.primaryCode,
+              codeType: "ICD-10",
+              description: rule.ruleDescription || "",
+              reason: exclusionExplanation,
+            });
+          }
+          continue;
+        }
+        
         foundCodes.delete(allTerms.find(t => 
           rule.triggerTerms?.some(rt => t.term.toLowerCase() === rt.toLowerCase())
         )?.matchedCode || '');
@@ -94,6 +123,10 @@ async function matchCodesFromDatabase(text: string, clinicalContent?: {
   
   for (const term of allTerms) {
     if (foundTerms.includes(term.term) && term.matchedCode && !localMatches.some(m => m.code === term.matchedCode)) {
+      if (suppressedCodes.has(term.matchedCode)) {
+        continue;
+      }
+      
       const alreadyHandledByRule = localMatches.some(m => {
         const rule = allRules.find(r => r.primaryCode === m.code);
         return rule?.triggerTerms?.some(t => t.toLowerCase() === term.term.toLowerCase());
@@ -111,7 +144,7 @@ async function matchCodesFromDatabase(text: string, clinicalContent?: {
     }
   }
   
-  return { localMatches, matchedTerms };
+  return { localMatches, relatedCodes, matchedTerms };
 }
 
 const liveAnalysisTracker = new Map<string, { count: number; resetTime: number }>();
@@ -365,7 +398,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No extracted text provided" });
       }
 
-      const { localMatches, matchedTerms } = await matchCodesFromDatabase(extractedText, clinicalContent);
+      const { localMatches, relatedCodes, matchedTerms } = await matchCodesFromDatabase(extractedText, clinicalContent);
       
       let aiSuggestions: CodeSuggestion[] = [];
       
@@ -443,7 +476,8 @@ ${clinicalContext}${alreadyCodedInfo}`,
       const allSuggestions = [...localMatches, ...aiSuggestions];
       
       res.json({ 
-        suggestions: allSuggestions,
+        suggested_codes: allSuggestions,
+        related_codes: relatedCodes,
         source: {
           database: localMatches.length,
           ai: aiSuggestions.length,

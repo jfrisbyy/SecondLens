@@ -1,0 +1,88 @@
+-- ✅ Updated ICD-10 Logic Schema for SecondLens v2
+
+-- Table 1: Clinical Term Mappings
+CREATE TABLE icd_term_map (
+    id SERIAL PRIMARY KEY,
+    term TEXT NOT NULL,
+    normalized_term TEXT,
+    matched_code VARCHAR(10),
+    match_confidence INT DEFAULT 100,
+    combo_trigger BOOLEAN DEFAULT FALSE,
+    requires_secondary_code BOOLEAN DEFAULT FALSE
+);
+
+-- Table 2: Logic Rules (now includes suppression and reason-not-selected fields)
+CREATE TABLE icd_logic_rules (
+    id SERIAL PRIMARY KEY,
+    condition_cluster TEXT,
+    trigger_terms TEXT[],
+    primary_code VARCHAR(10),
+    secondary_code VARCHAR(10),
+    rule_description TEXT,
+    suppression_keywords TEXT[],
+    reason_not_selected TEXT
+);
+
+-- Table 3: Explanation Templates (shown when code is selected)
+CREATE TABLE icd_explanations (
+    id SERIAL PRIMARY KEY,
+    icd_code VARCHAR(10),
+    explanation TEXT
+);
+
+-- Table 4: Related Code Explanations (shown when code is excluded)
+CREATE TABLE icd_related_exclusions (
+    id SERIAL PRIMARY KEY,
+    icd_code VARCHAR(10),
+    explanation TEXT
+);
+
+-- Sample Data: Term Mappings
+INSERT INTO icd_term_map (term, normalized_term, matched_code, combo_trigger, requires_secondary_code)
+VALUES
+('type 2 diabetes', 'diabetes', 'E11.9', TRUE, FALSE),
+('type 2 diabetes with hyperglycemia', 'diabetes', 'E11.65', TRUE, FALSE),
+('type 2 diabetes with hypoglycemia with coma', 'diabetes', 'E11.641', TRUE, FALSE),
+('type 2 diabetes with neuropathy', 'diabetes', 'E11.40', TRUE, FALSE),
+('type 2 diabetes with circulatory complications', 'diabetes', 'E11.51', TRUE, FALSE),
+('chronic kidney disease', 'ckd', 'N18.9', TRUE, TRUE),
+('CKD stage 3', 'ckd_stage_3', 'N18.3', FALSE, FALSE),
+('essential hypertension', 'htn', 'I10', FALSE, FALSE),
+('hypertensive heart and CKD stage 1-4', 'htn_ckd_early', 'I13.0', TRUE, TRUE),
+('hx of type 2 diabetes', 'history_diabetes', 'Z86.39', FALSE, FALSE);
+
+-- Sample Data: Logic Rules
+INSERT INTO icd_logic_rules (condition_cluster, trigger_terms, primary_code, secondary_code, rule_description, suppression_keywords, reason_not_selected)
+VALUES
+-- Combo: Diabetes + CKD
+('diabetes_ckd', ARRAY['type 2 diabetes', 'chronic kidney disease'], 'E11.22', NULL, 'Use combo code for diabetes with CKD', NULL, NULL),
+-- CKD stage 3 only
+('ckd_stage_3', ARRAY['CKD stage 3'], 'N18.3', NULL, 'CKD stage 3 identified', NULL, NULL),
+-- Diabetes with hyperglycemia
+('diabetes_hyperglycemia', ARRAY['type 2 diabetes with hyperglycemia'], 'E11.65', NULL, 'Diabetes with high blood sugar', ARRAY['stable sugars', 'denies hyperglycemia'], 'Hyperglycemia not documented. Chart says stable sugars.'),
+-- Diabetes with hypoglycemia and coma
+('diabetes_hypoglycemia_coma', ARRAY['type 2 diabetes with hypoglycemia with coma'], 'E11.641', NULL, 'Diabetes with low blood sugar and coma', ARRAY['denies hypoglycemia'], 'No hypoglycemia documented. Patient denies symptoms.'),
+-- Diabetes with circulatory issues
+('diabetes_circulatory', ARRAY['type 2 diabetes with circulatory complications'], 'E11.51', NULL, 'Diabetes with circulatory issues', ARRAY['no vascular issues'], 'No circulatory complications documented.'),
+-- Diabetes with neuropathy
+('diabetes_neuro', ARRAY['type 2 diabetes with neuropathy'], 'E11.40', NULL, 'Diabetes with nervous system complications', ARRAY['no neuropathy', 'denies numbness'], 'No neuropathy symptoms documented.'),
+-- Unspecified complication
+('diabetes_unspecified_complication', ARRAY['type 2 diabetes with complications'], 'E11.69', NULL, 'Diabetes with unspecified complications', ARRAY['no complication'], 'No complication documented. Chart is specific.'),
+-- History of diabetes (conflict with active DM)
+('diabetes_history', ARRAY['hx of type 2 diabetes'], 'Z86.39', NULL, 'History of resolved diabetes', ARRAY['has type 2 diabetes', 'currently diabetic'], 'Patient currently has diabetes — history code not used.');
+
+-- Explanation Templates (selected codes)
+INSERT INTO icd_explanations (icd_code, explanation)
+VALUES
+('E11.22', 'Type 2 diabetes with chronic kidney disease. ICD-10 guideline requires combo code (E11.22).'),
+('N18.3', 'CKD Stage 3. Moderate kidney function loss.');
+
+-- Related Exclusion Explanations
+INSERT INTO icd_related_exclusions (icd_code, explanation)
+VALUES
+('E11.65', 'Not selected: Hyperglycemia not documented. Chart says stable blood sugars.'),
+('E11.641', 'Not selected: Hypoglycemia with coma not present. Patient denies symptoms.'),
+('E11.40', 'Not selected: No signs of neuropathy documented. No numbness or tingling reported.'),
+('E11.51', 'Not selected: No circulatory complications mentioned in this visit.'),
+('E11.69', 'Not selected: Chart is specific about CKD. Unspecified complication code not needed.'),
+('Z86.39', 'Not selected: Patient has current diabetes. History code only used for resolved cases.');
