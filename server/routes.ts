@@ -668,7 +668,9 @@ Clinical Content Summary:
               role: "system",
               content: `You are an expert medical coder. Based on the de-identified medical text and clinical content provided, suggest appropriate ICD-10 and CPT codes.
 
-Analyze the clinical information and provide accurate code suggestions with confidence levels.
+Analyze the clinical information and provide:
+1. BEST MATCH codes - the most accurate codes supported by the documentation
+2. EXCLUDED codes - codes that might seem relevant but should NOT be used, with clear explanations why
 
 Respond in JSON format:
 {
@@ -680,6 +682,14 @@ Respond in JSON format:
       "confidence": "High" | "Medium" | "Low",
       "details": "Reasoning for suggesting this code based on the clinical information"
     }
+  ],
+  "excluded_codes": [
+    {
+      "code": "ICD-10 or CPT code that was considered but NOT selected",
+      "codeType": "ICD-10" or "CPT",
+      "description": "What this code represents",
+      "reason": "Clear explanation of why this code should NOT be used based on the documentation (e.g., 'Documentation indicates condition was ruled out', 'No supporting evidence for this diagnosis', 'More specific code available')"
+    }
   ]
 }
 
@@ -688,7 +698,9 @@ Guidelines:
 - Use CPT codes for procedures and services
 - Provide High confidence only when clinical information clearly supports the code
 - Include all relevant codes that can be inferred from the document
-- If information is ambiguous, use Medium or Low confidence`,
+- If information is ambiguous, use Medium or Low confidence
+- ALWAYS provide excluded_codes - think about what codes a less experienced coder might incorrectly use and explain why they're wrong
+- excluded_codes should include codes that are commonly confused or similar to the correct codes`,
             },
             {
               role: "user",
